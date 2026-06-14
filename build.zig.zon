@@ -1,0 +1,14 @@
+.{
+    .name = .vega68,
+    .version = "0.0.0",
+    .fingerprint = 0x7391f004b49efea6,
+    .minimum_zig_version = "0.16.0",
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "LICENSE",
+        "README.md",
+        "src",
+    },
+    .dependencies = .{},
+}
