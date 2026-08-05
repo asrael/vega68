@@ -1,27 +1,19 @@
 mod common;
 
-use common::{assert_cart, bios_symbol, build, build_bios, run_until};
+use common::{DONE, MAX_FRAMES, assert_cart, bios_symbol, build, build_bios, run_until};
 use vega68::System;
-use vega68::bus::{PAD_DOWN, PAD_L, PAD_START};
+use vega68::bus::{PAD_DOWN, PAD_L, PAD_START, VRAM_BASE};
 
 #[test]
-fn reset_restarts_the_cart_window_three_times() {
+fn reset_restarts_the_cart_window_and_restores_the_machine() {
     let Some(sys) = assert_cart("reset", "boot\nboot\nboot\nok\n") else {
         return;
     };
 
     assert_eq!(
-        sys.bus.mem[bios_symbol("v68_reset_reason") as usize],
-        1,
+        sys.bus.reset_reason, 1,
         "the warm-boot flag did not survive the crt0 re-entry"
     );
-}
-
-#[test]
-fn reset_restores_the_vectors_and_disables_interrupts() {
-    let Some(sys) = assert_cart("reset", "boot\nboot\nboot\nok\n") else {
-        return;
-    };
 
     let stub = bios_symbol("v68_rte_stub");
     let vector = |at: usize| u32::from_be_bytes(sys.bus.mem[at..at + 4].try_into().unwrap());
@@ -43,19 +35,57 @@ fn reset_restores_the_vectors_and_disables_interrupts() {
 }
 
 #[test]
-fn the_reset_reason_survives_the_crt0_clear_range() {
-    if build_bios().is_none() {
+fn irq_devkit_installs_both_sources_and_reports_the_measured_cadence() {
+    let Some(sys) = assert_cart("irq", "ok\n") else {
         return;
+    };
+
+    assert_eq!(sys.bus.mem[VRAM_BASE as usize + 4], 70, "fire count");
+    assert_eq!(sys.bus.mem[VRAM_BASE as usize + 5], 40, "first line seen");
+    assert_eq!(sys.bus.mem[VRAM_BASE as usize + 6], 178, "last line seen");
+}
+
+fn wait_for_done(sys: &mut System, from: usize, expected: &str) {
+    for frame in 0..MAX_FRAMES {
+        sys.run_frame();
+
+        if let Some(pos) = sys.bus.debug_out[from..].iter().position(|&b| b == DONE) {
+            let cut = from + pos + 1;
+            let mut want = expected.as_bytes().to_vec();
+            want.push(DONE);
+
+            assert_eq!(
+                String::from_utf8_lossy(&sys.bus.debug_out[from..cut]),
+                String::from_utf8_lossy(&want)
+            );
+            return;
+        }
+
+        assert!(
+            frame + 1 < MAX_FRAMES,
+            "{expected:?} did not finish in {MAX_FRAMES} frames; output so far:\n{}",
+            String::from_utf8_lossy(&sys.bus.debug_out[from..])
+        );
     }
+}
 
-    let bss_end = bios_symbol("__bss_end");
-    let flag = bios_symbol("v68_reset_reason");
+#[test]
+fn reload_preserves_cart_noinit_and_reports_the_reload_reason() {
+    let Some((bios, file)) = build("reload") else {
+        return;
+    };
 
-    assert!(
-        flag >= bss_end,
-        "v68_reset_reason is at {flag:#010x}, inside the crt0 clear range \
-         (ends {bss_end:#010x}) -- .noinit must be placed below .bss in bios.ld"
+    let mut sys = System::new(&bios, &file).unwrap();
+    wait_for_done(&mut sys, 0, "cold\n");
+
+    sys.reload(&file).unwrap();
+    assert_eq!(
+        sys.bus.reset_reason, 2,
+        "reset_reason is not V68_RESET_RELOAD after reload"
     );
+
+    let mark = sys.bus.debug_out.len();
+    wait_for_done(&mut sys, mark, "reload ok\n");
 }
 
 #[test]

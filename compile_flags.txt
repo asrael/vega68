@@ -2,7 +2,7 @@
 -mcpu=68040
 -I./devkit
 -I./bios
--DV68_ANALYSIS
+-DV68_LSP
 -ffreestanding
 -nostdlib
 -std=c99

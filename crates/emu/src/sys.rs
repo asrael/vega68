@@ -1,15 +1,29 @@
-use m68k::{CpuCore, CpuType, CycleBatchExit};
+use m68k::{BatchExit, CpuCore, CpuType};
 
 use crate::bus::{Bus, CART_BASE, LINES_PER_FRAME, VISIBLE_LINES};
 use crate::cart::{self, CartError};
 use crate::vdp;
 
-/// 100 MHz / 60 fps.
-pub const CYCLES_PER_FRAME: u64 = 1_666_667;
+const RESET_RELOAD: u16 = 2;
+
+/// 100 MHz @ ~5 cycles/instruction, 60 fps, 200 lines/frame.
+pub const INSTRUCTIONS_PER_LINE: u32 = 1_667;
 
 pub struct System {
     pub bus: Bus,
     pub cpu: CpuCore,
+}
+
+fn line_irq_fires(compare: u16, interval: u16, line: u32) -> bool {
+    let compare = compare as u32;
+
+    match interval {
+        0 => line == compare,
+        n => {
+            let n = n as u32;
+            line >= compare && line < VISIBLE_LINES && (line - compare) % n == 0
+        }
+    }
 }
 
 impl System {
@@ -26,9 +40,24 @@ impl System {
         Ok(System { cpu, bus })
     }
 
-    pub fn run_frame(&mut self) {
-        const CYCLES_PER_LINE: i64 = (CYCLES_PER_FRAME / LINES_PER_FRAME as u64) as i64;
+    pub fn reload(&mut self, cart: &[u8]) -> Result<(), CartError> {
+        cart::parse(cart)?;
 
+        self.bus.mem[CART_BASE as usize..CART_BASE as usize + cart.len()].copy_from_slice(cart);
+
+        self.bus.irq_enable = 0;
+        self.bus.irq_pending = 0;
+        self.bus.line_compare = 0;
+        self.bus.line_interval = 0;
+        self.bus.brightness = 255;
+        self.bus.reset_reason = RESET_RELOAD;
+
+        self.cpu.reset(&mut self.bus);
+
+        Ok(())
+    }
+
+    pub fn run_frame(&mut self) {
         'frame: for line in 0..LINES_PER_FRAME {
             self.bus.line = line;
 
@@ -36,7 +65,9 @@ impl System {
                 self.bus.irq_pending |= 1;
             }
 
-            if line == self.bus.line_compare as u32 && self.bus.irq_enable & 2 != 0 {
+            if line_irq_fires(self.bus.line_compare, self.bus.line_interval, line)
+                && self.bus.irq_enable & 2 != 0
+            {
                 self.bus.irq_pending |= 2;
             }
 
@@ -47,36 +78,48 @@ impl System {
             };
             self.cpu.set_irq(level);
 
-            let mut cycles = 0i64;
+            let mut instructions = 0u32;
 
-            while cycles < CYCLES_PER_LINE {
-                let budget = (CYCLES_PER_LINE - cycles).min(i32::MAX as i64) as i32;
-                let r = self.cpu.run_for_cycles(&mut self.bus, budget);
+            while instructions < INSTRUCTIONS_PER_LINE {
+                let budget = INSTRUCTIONS_PER_LINE - instructions;
+                let r = self.cpu.run_batch(&mut self.bus, budget, &[]);
 
                 let taken = match r.exit {
-                    CycleBatchExit::IllegalInstruction { .. } => {
-                        self.cpu.take_illegal_exception(&mut self.bus)
+                    BatchExit::IllegalInstruction { .. } => {
+                        self.cpu.take_illegal_exception(&mut self.bus);
+                        1
                     }
-                    CycleBatchExit::AlineTrap { .. } => {
-                        self.cpu.take_aline_exception(&mut self.bus)
+
+                    BatchExit::AlineTrap { .. } => {
+                        self.cpu.take_aline_exception(&mut self.bus);
+                        1
                     }
-                    CycleBatchExit::FlineTrap { .. } => {
-                        self.cpu.take_fline_exception(&mut self.bus)
+
+                    BatchExit::FlineTrap { .. } => {
+                        self.cpu.take_fline_exception(&mut self.bus);
+                        1
                     }
-                    CycleBatchExit::Breakpoint { .. } => {
-                        self.cpu.take_bkpt_exception(&mut self.bus)
+
+                    BatchExit::Breakpoint { .. } => {
+                        self.cpu.take_bkpt_exception(&mut self.bus);
+                        1
                     }
-                    CycleBatchExit::TrapInstruction { trap_num } => {
-                        self.cpu.take_trap_exception(&mut self.bus, trap_num)
+
+                    BatchExit::TrapInstruction { trap_num } => {
+                        self.cpu.take_trap_exception(&mut self.bus, trap_num);
+                        1
                     }
-                    _ => 0,
+
+                    BatchExit::BudgetExhausted => 0,
+                    BatchExit::Stopped => break,
+                    BatchExit::WatchedPc { .. } => unreachable!("watch list is empty"),
                 };
 
-                if r.cycles + taken <= 0 {
-                    break 'frame; // halted/stuck: don't spin forever
+                if r.instructions + taken == 0 {
+                    break 'frame; // stuck: don't spin forever
                 }
 
-                cycles += (r.cycles + taken) as i64;
+                instructions += r.instructions + taken;
             }
         }
     }
@@ -130,6 +173,43 @@ mod tests {
     }
 
     #[test]
+    fn line_irq_fires_matches_the_worked_table() {
+        let cases: [(u16, u16, u32); 7] = [
+            (185, 0, 1), // decision 1: interval 0 still fires in vblank
+            (40, 0, 1),
+            (40, 2, 70),
+            (41, 2, 70), // odd compare, even interval: phase, not modulus
+            (0, 1, 180),
+            (170, 5, 2),
+            (185, 2, 0), // repeat clamp: no fire in vblank
+        ];
+
+        for (compare, interval, want) in cases {
+            let count = (0..LINES_PER_FRAME)
+                .filter(|&line| line_irq_fires(compare, interval, line))
+                .count();
+
+            assert_eq!(count as u32, want, "compare={compare} interval={interval}");
+        }
+    }
+
+    #[test]
+    fn vblank_sets_pending_only_when_enabled() {
+        for (irq_enable, want_pending) in [(1u16, true), (0u16, false)] {
+            let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+            m.bus.irq_enable = irq_enable;
+
+            m.run_frame();
+
+            assert_eq!(
+                m.bus.irq_pending & 1 != 0,
+                want_pending,
+                "vblank pending bit wrong for irq_enable={irq_enable:#x}"
+            );
+        }
+    }
+
+    #[test]
     fn cart_payload_lands_at_window() {
         let code = b"\x60\xfe\0\0";
         let m = System::new(&test_bios(), &test_cart(code)).unwrap();
@@ -137,6 +217,89 @@ mod tests {
         assert_eq!(
             &m.bus.mem[CART_BASE as usize + HEADER_LEN..][..code.len()],
             code
+        );
+    }
+
+    #[test]
+    fn reload_replaces_cart_bytes_and_sets_the_reload_reason() {
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+        let new_cart = test_cart(&[0x4e, 0x71, 0x60, 0xfe]); // nop; bra.s *
+
+        m.reload(&new_cart).unwrap();
+
+        assert_eq!(
+            m.bus.reset_reason, 2,
+            "reset_reason is not V68_RESET_RELOAD"
+        );
+        assert_eq!(
+            &m.bus.mem[CART_BASE as usize..CART_BASE as usize + new_cart.len()],
+            &new_cart[..],
+            "cart window was not replaced with the new image"
+        );
+    }
+
+    #[test]
+    fn reload_preserves_ram_across_the_reset() {
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+        let noinit_addr = crate::bus::RAM_BASE as usize + crate::bus::BIOS_PARTITION as usize;
+
+        m.bus.mem[noinit_addr] = 0xAB; // stand-in for a cart .noinit byte
+
+        m.reload(&test_cart(&[0x60, 0xfe])).unwrap();
+
+        assert_eq!(
+            m.bus.mem[noinit_addr], 0xAB,
+            "reload touched RAM outside the cart window"
+        );
+    }
+
+    #[test]
+    fn reload_resets_device_registers_to_bus_new_values() {
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+
+        m.bus.irq_enable = 0b11;
+        m.bus.irq_pending = 0b11;
+        m.bus.line_compare = 123;
+        m.bus.line_interval = 5;
+        m.bus.brightness = 10;
+
+        m.reload(&test_cart(&[0x60, 0xfe])).unwrap();
+
+        assert_eq!(m.bus.irq_enable, 0, "irq_enable not reset");
+        assert_eq!(m.bus.irq_pending, 0, "irq_pending not reset");
+        assert_eq!(m.bus.line_compare, 0, "line_compare not reset");
+        assert_eq!(m.bus.line_interval, 0, "line_interval not reset");
+        assert_eq!(m.bus.brightness, 255, "brightness not reset");
+    }
+
+    #[test]
+    fn reload_rejects_a_malformed_image_and_leaves_the_machine_untouched() {
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+        let noinit_addr = crate::bus::RAM_BASE as usize + crate::bus::BIOS_PARTITION as usize;
+
+        m.bus.reset_reason = 1;
+        m.bus.mem[noinit_addr] = 0xCD;
+        let cart_before =
+            m.bus.mem[CART_BASE as usize..CART_BASE as usize + HEADER_LEN + 2].to_vec();
+
+        let mut bad = test_cart(&[0x60, 0xfe]);
+        bad[0] = b'X'; // bad magic
+
+        let err = m.reload(&bad).unwrap_err();
+
+        assert_eq!(err, CartError::BadMagic);
+        assert_eq!(
+            m.bus.reset_reason, 1,
+            "reset_reason changed on a rejected image"
+        );
+        assert_eq!(
+            m.bus.mem[noinit_addr], 0xCD,
+            "RAM changed on a rejected image"
+        );
+        assert_eq!(
+            m.bus.mem[CART_BASE as usize..CART_BASE as usize + HEADER_LEN + 2],
+            cart_before[..],
+            "cart window changed on a rejected image"
         );
     }
 }

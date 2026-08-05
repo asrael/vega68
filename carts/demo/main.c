@@ -35,7 +35,7 @@ static void load_checker(i32 tile) {
 
 static void setup(void) {
     V68_PALETTE[0] = 0x00102040;
-    V68_PALETTE[1] = 0x001A3050;
+    V68_PALETTE[1] = 0x003A3050;
 
     load_checker(BG_TILE);
     load_box(SPRITE_TILE);
@@ -52,7 +52,8 @@ static void setup(void) {
 }
 
 void main(void) {
-    v68_init();
+    v68_irq_init();
+    v68_vblank_on();
     setup();
 
     for (u32 b = 0; b < 255; b += FADE_STEP) {
@@ -92,7 +93,7 @@ void main(void) {
 
         *V68_BRIGHTNESS = bright;
         V68_SCROLL[0] = (u16)(scroll / 2);
-        V68_SCROLL[1] = (u16)(scroll / 4);
+        V68_SCROLL[1] = (u16)((scroll + 1) / 2);
         V68_SPRITES[0] = (u16)x;
         V68_SPRITES[1] = (u16)y;
     }

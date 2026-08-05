@@ -1,5 +1,6 @@
 use vega68::{bus, vdp};
 
+use std::collections::BTreeMap;
 use std::path::Path;
 
 fn header_const(header: &str, name: &str) -> u32 {
@@ -44,14 +45,6 @@ fn header_matches_emulator_abi() {
         ("V68_SPRITES", format!("{:#010X}", bus::VRAM_BASE + 0x6_0000)),
         ("V68_SCROLL", format!("{:#010X}", bus::VRAM_BASE + 0x6_1000)),
         ("V68_PALETTE", format!("{:#010X}", bus::PALETTE_BASE)),
-        ("V68_VDP_STATUS", format!("{:#010X}", bus::VDP_STATUS)),
-        ("V68_IRQ_ENABLE", format!("{:#010X}", bus::IRQ_ENABLE)),
-        ("V68_IRQ_ACK", format!("{:#010X}", bus::IRQ_ACK)),
-        ("V68_LINE_COMPARE", format!("{:#010X}", bus::LINE_COMPARE)),
-        ("V68_BRIGHTNESS", format!("{:#010X}", bus::BRIGHTNESS)),
-        ("V68_PAD_1", format!("{:#010X}", bus::PAD_1)),
-        ("V68_PAD_2", format!("{:#010X}", bus::PAD_2)),
-        ("V68_DEBUG_PUTC", format!("{:#010X}", bus::DEBUG_PUTC)),
     ];
 
     for (name, value) in defines {
@@ -65,6 +58,112 @@ fn header_matches_emulator_abi() {
             "vega68_hw.h: {name} disagrees with emulator ({line} vs {value})"
         );
     }
+}
+
+/// `pub const NAME: u32 = 0xFF00_XXXX;` rows in `bus.rs`, keyed by name.
+/// `MMIO_BASE` itself is the region base, not a register, so it is excluded.
+fn bus_mmio_consts(bus_src: &str) -> BTreeMap<String, u32> {
+    bus_src
+        .lines()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix("pub const ")?;
+            let (name, rest) = rest.split_once(':')?;
+            let rest = rest.trim().strip_prefix("u32 = ")?;
+            let (value, _) = rest.split_once(';')?;
+            let value = value.trim();
+
+            if name == "MMIO_BASE" {
+                return None;
+            }
+
+            let Some(hex) = value.strip_prefix("0x") else {
+                // A register expressed as anything other than a bare 0x
+                // literal (e.g. `MMIO_BASE + 0x18`) would otherwise be
+                // silently skipped instead of checked against the header.
+                assert!(
+                    !value.contains("MMIO_BASE"),
+                    "bus.rs: {name}: MMIO const {value:?} is not a bare 0x literal; \
+                     mmio_block_is_exhaustive can't check it"
+                );
+                return None;
+            };
+            let hex = hex.replace('_', "");
+
+            if hex.len() != 8 || !hex.to_uppercase().starts_with("FF00") {
+                return None;
+            }
+
+            Some((name.to_string(), u32::from_str_radix(&hex, 16).unwrap()))
+        })
+        .collect()
+}
+
+fn header_mmio_defines(header: &str) -> BTreeMap<String, u32> {
+    header
+        .lines()
+        .filter_map(|l| {
+            let rest = l.trim().strip_prefix("#define V68_")?;
+            let (name, rest) = rest.split_once(char::is_whitespace)?;
+            let idx = rest.find("0x")?;
+            let hex: String = rest[idx + 2..]
+                .chars()
+                .take_while(char::is_ascii_hexdigit)
+                .collect();
+
+            if hex.len() != 8 || !hex.to_uppercase().starts_with("FF00") {
+                return None;
+            }
+
+            Some((name.to_string(), u32::from_str_radix(&hex, 16).unwrap()))
+        })
+        .collect()
+}
+
+#[test]
+fn mmio_block_is_exhaustive() {
+    let bus_src = repo_file("crates/emu/src/bus.rs");
+    let header = repo_file("devkit/vega68_hw.h");
+
+    let rust = bus_mmio_consts(&bus_src);
+    let mut hdr = header_mmio_defines(&header);
+
+    assert!(!rust.is_empty(), "no MMIO consts parsed from bus.rs");
+
+    for (name, value) in &rust {
+        let hval = hdr
+            .remove(name)
+            .unwrap_or_else(|| panic!("vega68_hw.h: missing #define V68_{name}"));
+
+        assert_eq!(
+            hval, *value,
+            "V68_{name} disagrees between bus.rs ({value:#010X}) and vega68_hw.h ({hval:#010X})"
+        );
+    }
+
+    assert!(
+        hdr.is_empty(),
+        "vega68_hw.h defines MMIO registers with no Rust const: {:?}",
+        hdr.keys().collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn vblank_and_line_mask_invariants() {
+    let header = repo_file("devkit/vega68_hw.h");
+
+    let vblank = header_const(&header, "V68_VBLANK");
+    let line_mask = header_const(&header, "V68_LINE_MASK");
+
+    assert!(
+        line_mask >= bus::LINES_PER_FRAME - 1,
+        "V68_LINE_MASK ({line_mask:#X}) does not cover the largest line number"
+    );
+    assert_eq!(
+        vblank & line_mask,
+        0,
+        "V68_VBLANK overlaps V68_LINE_MASK's line field"
+    );
+    assert_eq!(vblank.count_ones(), 1, "V68_VBLANK is not a single bit");
 }
 
 #[test]

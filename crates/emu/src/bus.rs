@@ -19,9 +19,11 @@ pub const IRQ_ENABLE: u32 = 0xFF00_0004;
 pub const IRQ_ACK: u32 = 0xFF00_0008;
 pub const LINE_COMPARE: u32 = 0xFF00_000C;
 pub const BRIGHTNESS: u32 = 0xFF00_0010;
+pub const LINE_INTERVAL: u32 = 0xFF00_0014;
 pub const PAD_1: u32 = 0xFF00_0100;
 pub const PAD_2: u32 = 0xFF00_0104;
 pub const DEBUG_PUTC: u32 = 0xFF00_0200;
+pub const RESET_REASON: u32 = 0xFF00_0300;
 
 pub const PAD_UP: u16 = 0x0001;
 pub const PAD_DOWN: u16 = 0x0002;
@@ -41,6 +43,10 @@ pub const LINES_PER_FRAME: u32 = 200;
 
 const DEBUG_OUT_CAP: usize = 64 * 1024;
 
+fn printable(b: u8) -> bool {
+    b == b'\n' || (0x20..=0x7E).contains(&b)
+}
+
 pub struct Bus {
     pub brightness: u8,
     pub debug_out: Vec<u8>,
@@ -48,8 +54,10 @@ pub struct Bus {
     pub irq_pending: u16,
     pub line: u32,
     pub line_compare: u16,
+    pub line_interval: u16,
     pub mem: Vec<u8>,
     pub pads: [u16; 2],
+    pub reset_reason: u16,
 }
 
 impl Bus {
@@ -66,8 +74,10 @@ impl Bus {
             irq_pending: 0,
             line: 0,
             line_compare: 0,
+            line_interval: 0,
             mem,
             pads: [0; 2],
+            reset_reason: 0,
         }
     }
 
@@ -78,8 +88,10 @@ impl Bus {
             IRQ_ACK => self.irq_pending,
             LINE_COMPARE => self.line_compare,
             BRIGHTNESS => self.brightness as u16,
+            LINE_INTERVAL => self.line_interval,
             PAD_1 => self.pads[0],
             PAD_2 => self.pads[1],
+            RESET_REASON => self.reset_reason,
             _ => 0,
         }
     }
@@ -111,13 +123,19 @@ impl Bus {
                 IRQ_ACK => self.irq_pending &= !(value as u16),
                 LINE_COMPARE => self.line_compare = value as u16,
                 BRIGHTNESS => self.brightness = value as u8,
+                LINE_INTERVAL => self.line_interval = value as u16,
                 DEBUG_PUTC => {
+                    let b = value as u8;
+
                     if self.debug_out.len() < DEBUG_OUT_CAP {
-                        self.debug_out.push(value as u8);
+                        self.debug_out.push(b);
                     }
 
-                    eprint!("{}", (value as u8) as char);
+                    if printable(b) {
+                        eprint!("{}", b as char);
+                    }
                 }
+                RESET_REASON => self.reset_reason = value as u16,
                 _ => {}
             }
 
@@ -199,6 +217,50 @@ mod tests {
         b.write_word(BRIGHTNESS, 0x77);
 
         assert_eq!(b.read_word(BRIGHTNESS), 0x77);
+    }
+
+    #[test]
+    fn irq_enable_and_line_regs_read_back() {
+        let mut b = bus();
+
+        b.write_word(IRQ_ENABLE, 0b11);
+        assert_eq!(
+            b.read_word(IRQ_ENABLE),
+            0b11,
+            "IRQ_ENABLE did not read back"
+        );
+
+        b.write_word(IRQ_ENABLE, 0xFF);
+        assert_eq!(
+            b.read_word(IRQ_ENABLE),
+            0b11,
+            "IRQ_ENABLE did not mask writes to its two live bits"
+        );
+
+        b.write_word(LINE_COMPARE, 0x1234);
+        assert_eq!(
+            b.read_word(LINE_COMPARE),
+            0x1234,
+            "LINE_COMPARE did not read back"
+        );
+
+        b.write_word(LINE_INTERVAL, 0x0005);
+        assert_eq!(
+            b.read_word(LINE_INTERVAL),
+            0x0005,
+            "LINE_INTERVAL did not read back"
+        );
+    }
+
+    #[test]
+    fn only_printable_bytes_reach_the_host_terminal() {
+        for b in [b'\n', 0x20, b'A', 0x7E] {
+            assert!(printable(b), "{b:#04x} should reach the terminal");
+        }
+
+        for b in [0x00, 0x04, 0x07, 0x08, 0x1B, b'\r', 0x7F, 0x9B, 0xFF] {
+            assert!(!printable(b), "{b:#04x} must not reach the terminal");
+        }
     }
 
     #[test]

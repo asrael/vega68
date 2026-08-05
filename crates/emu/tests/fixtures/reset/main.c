@@ -11,8 +11,10 @@ void main(void) {
     v68_puts("boot\n");
 
     if (n < 2) {
-        v68_init();
+        v68_irq_init();
+        v68_vblank_on();
         V68_VEC_LINE = (u32)on_line;
+
         v68_reset();
     }
 

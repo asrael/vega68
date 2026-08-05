@@ -106,10 +106,10 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
     let sources = cart_sources(cart_dir)?;
     let elf = out_dir.join(format!("{name}.elf"));
     let v68 = out_dir.join(format!("{name}.v68"));
+    let stamp = out_dir.join(format!("{name}.inputs"));
     let v68_tmp = tmp_path(&v68);
 
     build_bios()?;
-    prepare_out(out_dir, &v68)?;
 
     let mut args = cflags("-O2");
 
@@ -122,8 +122,23 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
         s(&carts.join("crt0.s")),
     ]);
     args.extend(sources.iter().map(|p| s(p)));
+
+    let mut inputs = find_files(cart_dir, &["c", "h", "ld"])?;
+
+    inputs.extend(find_files(&root.join("devkit"), &["h", "ld"])?);
+    inputs.push(carts.join("cart.ld"));
+    inputs.push(carts.join("crt0.s"));
+    inputs.push(root.join("target/bios/bios.sym"));
+
+    let want = args.join("\n");
+
     args.extend(["-o".to_owned(), s(&elf)]);
 
+    if !stale(&v68, &stamp, &want, &inputs) {
+        return Ok(v68);
+    }
+
+    prepare_out(out_dir, &v68)?;
     status("Compiling", &name);
     run("m68k-elf-gcc", &args, None)?;
     run(
@@ -136,6 +151,7 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
 
     check_cart_len(image.len() as usize).map_err(|e| format!("{}: {e}", v68.display()))?;
     publish(&v68_tmp, &v68)?;
+    write_atomic(&stamp, want.as_bytes())?;
 
     Ok(v68)
 }
@@ -186,7 +202,7 @@ pub fn repo_root() -> Result<PathBuf, String> {
 
 pub fn status(verb: &str, msg: &str) {
     if std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
-        eprintln!("\x1b[1;32m{verb:>12}\x1b[0m {msg}");
+        eprintln!("\x1b[1m\x1b[92m{verb:>12}\x1b[0m {msg}");
     } else {
         eprintln!("{verb:>12} {msg}");
     }
@@ -335,7 +351,6 @@ fn s(p: &Path) -> String {
     p.to_str().unwrap().to_owned()
 }
 
-// each builder takes its own lock and they nest, so one shared lock deadlocks
 fn serialize(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
     lock.lock().unwrap_or_else(|e| e.into_inner())
 }

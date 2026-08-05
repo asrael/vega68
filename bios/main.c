@@ -4,8 +4,6 @@
 #define V68_CART  ((volatile u8 *)0x01000000)
 #define V68_MAGIC 0x56363800
 
-__attribute__((section(".noinit"))) volatile u8 v68_reset_reason;
-
 void __attribute__((noreturn)) v68_reset(void) {
     *V68_IRQ_ENABLE = 0;
     *V68_IRQ_ACK = V68_IRQ_VBLANK | V68_IRQ_LINE;
@@ -15,7 +13,7 @@ void __attribute__((noreturn)) v68_reset(void) {
 
     __asm__ volatile("move.w #0x2700, %%sr" ::: "cc");
 
-    v68_reset_reason = V68_RESET_WARM;
+    *V68_RESET_REASON = V68_RESET_WARM;
 
     __asm__ volatile("move.l #__stack_top, %sp\n\tjmp _start");
     __builtin_unreachable();

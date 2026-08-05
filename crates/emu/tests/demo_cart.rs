@@ -7,7 +7,7 @@ use vega68::vdp::{HEIGHT, WIDTH};
 
 const BACKDROP: u32 = 0x0010_2040; // palette 0
 const BACKDROP_PX: usize = 10 * WIDTH + 10;
-const CHECKER: u32 = 0x001A_3050; // palette 1
+const CHECKER: u32 = 0x003A_3050; // palette 1
 const CHECKER_PX: usize = 10 * WIDTH + 14;
 const DIM_FRAMES: u8 = 4;
 const FADE_CAP: usize = 34;

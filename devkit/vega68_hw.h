@@ -37,14 +37,21 @@ typedef ptrdiff_t isize;
 #define V68_LINE_COMPARE      ((volatile u16 *)0xFF00000C)
 #define V68_BRIGHTNESS        ((volatile u16 *)0xFF000010)
 #define V68_BRIGHTNESS_LEVELS 256
+#define V68_LINE_INTERVAL     ((volatile u16 *)0xFF000014)
 #define V68_PAD_1             ((volatile u16 *)0xFF000100)
 #define V68_PAD_2             ((volatile u16 *)0xFF000104)
 #define V68_DEBUG_PUTC        ((volatile u16 *)0xFF000200)
+#define V68_RESET_REASON      ((volatile u16 *)0xFF000300)
 
-#define V68_VBLANK 0x8000
+#define V68_VBLANK    0x8000
+#define V68_LINE_MASK 0x00FF
 
 #define V68_IRQ_VBLANK 0x0001
 #define V68_IRQ_LINE   0x0002
+
+#define V68_RESET_COLD   0
+#define V68_RESET_WARM   1
+#define V68_RESET_RELOAD 2
 
 static inline volatile u32 *v68_vec(u32 a) {
     volatile u32 *p;
@@ -56,7 +63,7 @@ static inline volatile u32 *v68_vec(u32 a) {
 #define V68_VEC_LINE   (*v68_vec(0x70))
 
 #ifdef __clang__
-#ifdef V68_ANALYSIS
+#ifdef V68_LSP
 #define V68_INTERRUPT __attribute__((unused))
 #else
 #error "clang cannot build vega68 interrupt handlers (no interrupt_handler attribute)"
@@ -86,7 +93,28 @@ static inline void v68_puts(const char *s) {
 void __attribute__((noreturn)) v68_reset(void);
 
 __attribute__((weak)) volatile bool v68_frame_ready = false;
+__attribute__((weak)) void v68_hblank_hook(u16 line);
 __attribute__((weak)) void v68_vblank_hook(void);
+
+V68_INTERRUPT static void v68_on_hblank(void) {
+    if (v68_hblank_hook)
+        v68_hblank_hook(*V68_VDP_STATUS & V68_LINE_MASK);
+
+    *V68_IRQ_ACK = V68_IRQ_LINE;
+}
+
+static inline void v68_hblank_on(u16 first, u16 every) {
+    V68_VEC_LINE       = (u32)v68_on_hblank;
+    *V68_LINE_COMPARE  = first;
+    *V68_LINE_INTERVAL = every;
+    *V68_IRQ_ENABLE   |= V68_IRQ_LINE;
+}
+
+static inline void v68_wait_vblank(void) {
+    while (!v68_frame_ready) {}
+    v68_frame_ready = false;
+}
+
 
 V68_INTERRUPT static void v68_on_vblank(void) {
     if (v68_vblank_hook)
@@ -96,17 +124,13 @@ V68_INTERRUPT static void v68_on_vblank(void) {
     *V68_IRQ_ACK = V68_IRQ_VBLANK;
 }
 
-static inline void v68_init(void) {
-    V68_VEC_VBLANK = (u32)v68_on_vblank;
-    *V68_IRQ_ENABLE = V68_IRQ_VBLANK;
-
-    // enable interrupts
+static inline void v68_irq_init(void) {
     __asm__ volatile("move.w #0x2000, %%sr" ::: "cc");
 }
 
-static inline void v68_wait_vblank(void) {
-    while (!v68_frame_ready) {}
-    v68_frame_ready = false;
+static inline void v68_vblank_on(void) {
+    V68_VEC_VBLANK = (u32)v68_on_vblank;
+    *V68_IRQ_ENABLE |= V68_IRQ_VBLANK;
 }
 
 #endif

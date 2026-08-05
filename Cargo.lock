@@ -683,9 +683,9 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "m68k"
-version = "0.3.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e402ea841b837d13611bc1c373abc53213ab4e93f653f79cc829fc2d4b111c45"
+checksum = "6700b04ce34dfc76ce2cce86a5853b655817e188e20a635ecf43cd76463940c8"
 
 [[package]]
 name = "memchr"
