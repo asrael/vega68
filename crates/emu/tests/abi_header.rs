@@ -1,0 +1,208 @@
+use vega68::{bus, vdp};
+
+use std::path::Path;
+
+fn header_const(header: &str, name: &str) -> u32 {
+    let line = header
+        .lines()
+        .find(|l| l.starts_with("#define") && l.split_whitespace().nth(1) == Some(name))
+        .unwrap_or_else(|| panic!("missing #define {name}"));
+
+    line.split_once(name)
+        .unwrap()
+        .1
+        .trim()
+        .trim_matches(['(', ')'])
+        .split('*')
+        .map(|term| {
+            let term = term.trim();
+
+            match term.strip_prefix("0x") {
+                Some(hex) => u32::from_str_radix(hex, 16).unwrap(),
+                None => term.parse().unwrap_or_else(|_| header_const(header, term)),
+            }
+        })
+        .product()
+}
+
+fn repo_file(name: &str) -> String {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../..")
+        .join(name);
+
+    std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{name}: {e}"))
+}
+
+#[test]
+fn header_matches_emulator_abi() {
+    let header = repo_file("devkit/vega68_hw.h");
+
+    #[rustfmt::skip]
+    let defines: Vec<(&str, String)> = vec![
+        ("V68_VRAM", format!("{:#010X}", bus::VRAM_BASE)),
+        ("V68_TILEMAP(n)", format!("{:#010X}", bus::VRAM_BASE + 0x4_0000)),
+        ("V68_SPRITES", format!("{:#010X}", bus::VRAM_BASE + 0x6_0000)),
+        ("V68_SCROLL", format!("{:#010X}", bus::VRAM_BASE + 0x6_1000)),
+        ("V68_PALETTE", format!("{:#010X}", bus::PALETTE_BASE)),
+        ("V68_VDP_STATUS", format!("{:#010X}", bus::VDP_STATUS)),
+        ("V68_IRQ_ENABLE", format!("{:#010X}", bus::IRQ_ENABLE)),
+        ("V68_IRQ_ACK", format!("{:#010X}", bus::IRQ_ACK)),
+        ("V68_LINE_COMPARE", format!("{:#010X}", bus::LINE_COMPARE)),
+        ("V68_BRIGHTNESS", format!("{:#010X}", bus::BRIGHTNESS)),
+        ("V68_PAD_1", format!("{:#010X}", bus::PAD_1)),
+        ("V68_PAD_2", format!("{:#010X}", bus::PAD_2)),
+        ("V68_DEBUG_PUTC", format!("{:#010X}", bus::DEBUG_PUTC)),
+    ];
+
+    for (name, value) in defines {
+        let line = header
+            .lines()
+            .find(|l| l.starts_with(&format!("#define {name}")))
+            .unwrap_or_else(|| panic!("vega68_hw.h: missing #define {name}"));
+
+        assert!(
+            line.to_uppercase().contains(&value.to_uppercase()),
+            "vega68_hw.h: {name} disagrees with emulator ({line} vs {value})"
+        );
+    }
+}
+
+#[test]
+fn header_sizes_match_emulator_abi() {
+    let header = repo_file("devkit/vega68_hw.h");
+
+    let sizes: Vec<(&str, u32)> = vec![
+        ("V68_VRAM_SIZE", bus::VRAM_SIZE),
+        ("V68_PALETTE_SIZE", bus::PALETTE_SIZE / 4),
+        ("V68_BRIGHTNESS_LEVELS", u8::MAX as u32 + 1),
+        ("V68_TILEMAP_COLS", vdp::TILEMAP_COLS as u32),
+        ("V68_TILEMAP_ROWS", vdp::TILEMAP_ROWS as u32),
+        (
+            "V68_TILEMAP_CELLS",
+            (vdp::TILEMAP_COLS * vdp::TILEMAP_ROWS) as u32,
+        ),
+        ("V68_TILEMAP_PLANES", vdp::TILEMAP_PLANES as u32),
+        ("V68_TILEMAP_STRIDE", vdp::TILEMAP_STRIDE as u32),
+        ("V68_SPRITE_COUNT", vdp::SPRITE_COUNT as u32),
+        ("V68_SPRITE_WORDS", (vdp::SPRITE_STRIDE / 2) as u32),
+    ];
+
+    for (name, value) in sizes {
+        assert_eq!(
+            header_const(&header, name),
+            value,
+            "vega68_hw.h: {name} disagrees with emulator"
+        );
+    }
+}
+
+#[test]
+fn bios_ram_bounds_match_emulator_abi() {
+    let header = repo_file("bios/bios.h");
+
+    let bounds: Vec<(&str, u32)> = vec![
+        ("V68_CART_RAM", bus::RAM_BASE + bus::BIOS_PARTITION),
+        ("V68_RAM_END", bus::RAM_BASE + bus::RAM_SIZE),
+    ];
+
+    for (name, value) in bounds {
+        assert_eq!(
+            header_const(&header, name),
+            value,
+            "bios/bios.h: {name} disagrees with emulator"
+        );
+    }
+}
+
+#[test]
+fn header_pad_bits_match_emulator_abi() {
+    let header = repo_file("devkit/vega68_hw.h");
+
+    let bits: Vec<(&str, u16)> = vec![
+        ("V68_PAD_UP", bus::PAD_UP),
+        ("V68_PAD_DOWN", bus::PAD_DOWN),
+        ("V68_PAD_LEFT", bus::PAD_LEFT),
+        ("V68_PAD_RIGHT", bus::PAD_RIGHT),
+        ("V68_PAD_A", bus::PAD_A),
+        ("V68_PAD_B", bus::PAD_B),
+        ("V68_PAD_X", bus::PAD_X),
+        ("V68_PAD_Y", bus::PAD_Y),
+        ("V68_PAD_START", bus::PAD_START),
+        ("V68_PAD_SELECT", bus::PAD_SELECT),
+        ("V68_PAD_L", bus::PAD_L),
+        ("V68_PAD_R", bus::PAD_R),
+    ];
+
+    for (name, value) in &bits {
+        assert_eq!(
+            header_const(&header, name),
+            *value as u32,
+            "vega68_hw.h: {name} disagrees with emulator"
+        );
+    }
+
+    let mut seen = 0u16;
+
+    for (name, value) in &bits {
+        assert_eq!(value.count_ones(), 1, "{name} is not a single bit");
+        assert_eq!(seen & value, 0, "{name} collides with an earlier pad bit");
+        seen |= value;
+    }
+}
+
+fn ld_number(text: &str) -> u32 {
+    let text = text.trim();
+
+    let (digits, scale) = match text.chars().last() {
+        Some('K') => (&text[..text.len() - 1], 1024),
+        Some('M') => (&text[..text.len() - 1], 1024 * 1024),
+        _ => (text, 1),
+    };
+
+    let value = match digits.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(hex, 16),
+        None => digits.parse(),
+    };
+
+    value.unwrap_or_else(|_| panic!("unparseable linker number {text:?}")) * scale
+}
+
+fn ram_region(name: &str) -> (u32, u32) {
+    let script = repo_file(name);
+
+    let line = script
+        .lines()
+        .find(|l| l.trim_start().starts_with("RAM"))
+        .unwrap_or_else(|| panic!("{name}: no RAM region in MEMORY block"));
+
+    let (origin, length) = line
+        .split_once("ORIGIN =")
+        .and_then(|(_, rest)| rest.split_once(", LENGTH ="))
+        .unwrap_or_else(|| panic!("{name}: malformed RAM region ({line})"));
+
+    (ld_number(origin), ld_number(length))
+}
+
+#[test]
+fn linker_scripts_match_emulator_abi() {
+    assert_eq!(
+        ram_region("bios/bios.ld"),
+        (bus::RAM_BASE, bus::BIOS_PARTITION),
+        "bios.ld: RAM region must be exactly the BIOS partition"
+    );
+
+    assert_eq!(
+        ram_region("carts/cart.ld"),
+        (
+            bus::RAM_BASE + bus::BIOS_PARTITION,
+            bus::RAM_SIZE - bus::BIOS_PARTITION
+        ),
+        "cart.ld: RAM region must be main RAM above the BIOS partition"
+    );
+}
+
+#[test]
+fn xtask_matches_emulator_abi() {
+    assert_eq!(xtask::CART_MAX as u32, bus::CART_SIZE);
+    assert_eq!(xtask::HEADER_LEN, vega68::cart::HEADER_LEN);
+}

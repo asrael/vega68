@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+
+      - name: install linux deps
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libudev-dev gcc-m68k-linux-gnu binutils-m68k-linux-gnu
+          sudo ln -s "$(command -v m68k-linux-gnu-gcc)" /usr/local/bin/m68k-elf-gcc
+          sudo ln -s "$(command -v m68k-linux-gnu-objcopy)" /usr/local/bin/m68k-elf-objcopy
+
+      - name: install macos deps
+        if: runner.os == 'macOS'
+        run: brew install m68k-elf-gcc
+
+      - name: cache windows m68k toolchain
+        if: runner.os == 'Windows'
+        id: m68k-cache
+        uses: actions/cache@v6
+        with:
+          path: C:\m68k
+          key: m68k-elf-gcc-v14.2.0_latest
+
+      - name: install windows deps
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          if ('${{ steps.m68k-cache.outputs.cache-hit }}' -ne 'true') {
+            curl.exe -sL -o m68k.zip https://github.com/iratahack/m68k-elf-gcc/releases/download/v14.2.0_latest/i686-w64-mingw32.zip
+            New-Item -ItemType Directory -Path C:\m68k | Out-Null
+            tar -xf m68k.zip -C C:\m68k
+          }
+          $gcc = Get-ChildItem -Recurse -Filter m68k-elf-gcc.exe C:\m68k | Select-Object -First 1
+          if (-not $gcc) { throw "m68k-elf-gcc.exe not found in toolchain zip" }
+          $gcc.DirectoryName | Out-File -Append $env:GITHUB_PATH
+
+      - run: cargo build --workspace
+      - run: cargo test --workspace

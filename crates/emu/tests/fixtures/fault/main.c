@@ -1,0 +1,14 @@
+#include "vega68_hw.h"
+
+void v68_vblank_hook(void) {
+    *V68_DEBUG_PUTC = '!';
+}
+
+void main(void) {
+    v68_init();
+    v68_puts("pre\n");
+
+    __asm__ volatile(".word 0x4afc"); // ILLEGAL: vector 4
+
+    v68_puts("post\n");
+}

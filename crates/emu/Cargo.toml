@@ -1,0 +1,23 @@
+[package]
+name = "vega68"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+default-run = "vega68"
+
+[lib]
+doctest = false
+
+[[bin]]
+name = "vega68"
+path = "src/main.rs"
+test = false
+
+[dependencies]
+gilrs = "0.11"
+m68k = "0.3.2"
+softbuffer = "0.4"
+winit = "0.30"
+
+[dev-dependencies]
+xtask = { path = "../xtask" }

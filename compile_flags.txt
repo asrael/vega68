@@ -1,0 +1,9 @@
+--target=m68k-none-elf
+-mcpu=68040
+-I./devkit
+-I./bios
+-DV68_ANALYSIS
+-ffreestanding
+-nostdlib
+-std=c99
+-Wall

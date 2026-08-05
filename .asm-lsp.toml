@@ -1,0 +1,7 @@
+[default_config]
+assembler = "gas"
+instruction_set = "x86/x86-64"
+
+[default_config.opts]
+diagnostics = false
+default_diagnostics = false
