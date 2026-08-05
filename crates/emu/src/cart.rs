@@ -3,7 +3,7 @@
 //!   +4  u32 BE version (0)
 //!   +8  u32 BE entry (m68k entry point)
 //!   +12 u32 BE reserved (0)
-//!   +16 payload: native image
+//!   +16 payload: m68k image
 
 use crate::bus::{CART_BASE, CART_SIZE};
 
@@ -94,7 +94,7 @@ pub(crate) fn test_bios() -> Vec<u8> {
 }
 
 #[cfg(test)]
-pub(crate) fn test_native_cart(code: &[u8]) -> Vec<u8> {
+pub(crate) fn test_cart(code: &[u8]) -> Vec<u8> {
     test_header(CART_BASE + HEADER_LEN as u32, code)
 }
 
@@ -119,7 +119,7 @@ mod tests {
     use super::*;
 
     fn native_with_entry(entry: u32) -> Vec<u8> {
-        let mut f = test_native_cart(&[0x60, 0xfe]);
+        let mut f = test_cart(&[0x60, 0xfe]);
 
         f[8..12].copy_from_slice(&entry.to_be_bytes());
 
@@ -135,16 +135,16 @@ mod tests {
     }
 
     #[test]
-    fn parses_native_header() {
+    fn parses_a_cart_header() {
         assert_eq!(
-            parse(&test_native_cart(&[0x60, 0xfe])).unwrap(),
+            parse(&test_cart(&[0x60, 0xfe])).unwrap(),
             CART_BASE + HEADER_LEN as u32
         );
     }
 
     #[test]
     fn rejects_bad_magic() {
-        let mut f = test_native_cart(&[0x60, 0xfe]);
+        let mut f = test_cart(&[0x60, 0xfe]);
 
         f[0] = b'X';
 
@@ -200,14 +200,14 @@ mod tests {
         assert_eq!(parse(b"V68\0").err(), Some(CartError::Truncated));
         assert_eq!(parse(b"").err(), Some(CartError::Truncated));
         assert_eq!(
-            parse(&test_native_cart(&[0x60, 0xfe])[..HEADER_LEN - 1]).err(),
+            parse(&test_cart(&[0x60, 0xfe])[..HEADER_LEN - 1]).err(),
             Some(CartError::Truncated)
         );
     }
 
     #[test]
     fn rejects_wrong_version() {
-        let mut f = test_native_cart(&[0x60, 0xfe]);
+        let mut f = test_cart(&[0x60, 0xfe]);
 
         f[7] = 1;
 

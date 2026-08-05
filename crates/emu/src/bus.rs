@@ -1,6 +1,6 @@
 use m68k::{AddressBus, FastMem};
 
-const BIOS_SIZE: u32 = 0x0010_0000; // 1 MiB window
+pub const BIOS_SIZE: u32 = 0x0010_0000; // 1 MiB window
 pub const CART_BASE: u32 = 0x0100_0000;
 pub const CART_SIZE: u32 = 0x0100_0000; // 16 MiB max
 pub const RAM_BASE: u32 = 0x0200_0000;
@@ -12,7 +12,7 @@ pub const VRAM_SIZE: u32 = 0x0008_0000; // 512 KiB
 pub const PALETTE_BASE: u32 = 0x0308_0000;
 pub const PALETTE_SIZE: u32 = 0x0000_0400; // 256 entries x 4 B
 pub const MEM_END: u32 = PALETTE_BASE + PALETTE_SIZE;
-const MMIO_BASE: u32 = 0xFF00_0000;
+pub const MMIO_BASE: u32 = 0xFF00_0000;
 
 pub const VDP_STATUS: u32 = 0xFF00_0000;
 pub const IRQ_ENABLE: u32 = 0xFF00_0004;
@@ -36,10 +36,10 @@ pub const PAD_SELECT: u16 = 0x0200;
 pub const PAD_L: u16 = 0x0400;
 pub const PAD_R: u16 = 0x0800;
 
-const DEBUG_OUT_CAP: usize = 64 * 1024;
-
 pub const VISIBLE_LINES: u32 = 180;
 pub const LINES_PER_FRAME: u32 = 200;
+
+const DEBUG_OUT_CAP: usize = 64 * 1024;
 
 pub struct Bus {
     pub brightness: u8,

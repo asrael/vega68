@@ -89,11 +89,11 @@ impl System {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::cart::{HEADER_LEN, test_bios, test_native_cart};
+    use crate::cart::{HEADER_LEN, test_bios, test_cart};
 
     #[test]
     fn boots_bios_vectors() {
-        let mut m = System::new(&test_bios(), &test_native_cart(&[0x60, 0xfe])).unwrap();
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
 
         m.run_frame();
 
@@ -117,7 +117,7 @@ mod tests {
             bios[HANDLER + 4..HANDLER + 8].copy_from_slice(&crate::bus::DEBUG_PUTC.to_be_bytes());
             bios[HANDLER + 8..HANDLER + 10].copy_from_slice(&[0x60, 0xfe]); // bra.s *
 
-            let cart = test_native_cart(&[opcode[0], opcode[1], 0x60, 0xfe]);
+            let cart = test_cart(&[opcode[0], opcode[1], 0x60, 0xfe]);
             let mut m = System::new(&bios, &cart).unwrap();
 
             m.run_frame();
@@ -130,9 +130,9 @@ mod tests {
     }
 
     #[test]
-    fn native_payload_lands_at_window() {
+    fn cart_payload_lands_at_window() {
         let code = b"\x60\xfe\0\0";
-        let m = System::new(&test_bios(), &test_native_cart(code)).unwrap();
+        let m = System::new(&test_bios(), &test_cart(code)).unwrap();
 
         assert_eq!(
             &m.bus.mem[CART_BASE as usize + HEADER_LEN..][..code.len()],
