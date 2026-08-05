@@ -1,4 +1,5 @@
 use std::ffi::OsStr;
+use std::io::IsTerminal;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -183,7 +184,11 @@ pub fn repo_root() -> Result<PathBuf, String> {
 }
 
 pub fn status(verb: &str, msg: &str) {
-    eprintln!("{verb:>12} {msg}");
+    if std::io::stderr().is_terminal() && std::env::var_os("NO_COLOR").is_none() {
+        eprintln!("\x1b[1;32m{verb:>12}\x1b[0m {msg}");
+    } else {
+        eprintln!("{verb:>12} {msg}");
+    }
 }
 
 fn bios_cflags(root: &Path) -> Vec<String> {
