@@ -19,10 +19,9 @@ fn plant(case: &str, files: &[&str]) -> PathBuf {
 #[test]
 fn a_directory_with_main_c_is_a_cart() {
     let dir = plant("has_main", &["main.c", "util.c"]);
-    let layout = xtask::cart_layout(&dir).unwrap();
+    let sources = xtask::cart_sources(&dir).unwrap();
 
-    let names: Vec<String> = layout
-        .sources
+    let names: Vec<String> = sources
         .iter()
         .map(|p| {
             p.strip_prefix(&dir)
@@ -38,7 +37,7 @@ fn a_directory_with_main_c_is_a_cart() {
 #[test]
 fn a_directory_without_main_c_is_not_a_cart() {
     let dir = plant("no_main", &["util.c"]);
-    let e = xtask::cart_layout(&dir).unwrap_err();
+    let e = xtask::cart_sources(&dir).unwrap_err();
 
     assert!(e.contains("main.c"), "{e}");
 }

@@ -9,11 +9,6 @@ pub const HEADER_LEN: usize = 16;
 
 const BIOS_EXPORTS: &[&str] = &["v68_monitor", "v68_reset"];
 
-#[derive(Debug, PartialEq)]
-pub struct CartLayout {
-    pub sources: Vec<PathBuf>,
-}
-
 pub fn bios_section(name: &str) -> Result<(u32, u32, u32), String> {
     let elf = repo_root()?.join("target/bios/vega68.elf");
     let image = std::fs::read(&elf).map_err(|e| format!("{}: {e}", elf.display()))?;
@@ -105,7 +100,7 @@ pub fn build_bios() -> Result<PathBuf, String> {
         return Ok(bin);
     }
 
-    eprintln!("building bios...");
+    status("Compiling", "bios");
     std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
     run("m68k-elf-gcc", &args, None)?;
     run(
@@ -138,9 +133,9 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
     let _held = serialize(&LOCK);
 
     let name = cart_name(cart_dir)?;
-    let layout = cart_layout(cart_dir)?;
+    let sources = cart_sources(cart_dir)?;
 
-    build_native_cart(&layout.sources, out_dir, &name)
+    build_native_cart(&sources, out_dir, &name)
 }
 
 pub fn burn_rom() -> Result<PathBuf, String> {
@@ -153,7 +148,7 @@ pub fn burn_rom() -> Result<PathBuf, String> {
     Ok(rom)
 }
 
-pub fn cart_layout(cart_dir: &Path) -> Result<CartLayout, String> {
+pub fn cart_sources(cart_dir: &Path) -> Result<Vec<PathBuf>, String> {
     let sources = find_files(cart_dir, &["c"])?;
     let has_main = sources
         .iter()
@@ -166,7 +161,7 @@ pub fn cart_layout(cart_dir: &Path) -> Result<CartLayout, String> {
         ));
     }
 
-    Ok(CartLayout { sources })
+    Ok(sources)
 }
 
 pub fn repo_root() -> Result<PathBuf, String> {
@@ -185,6 +180,10 @@ pub fn repo_root() -> Result<PathBuf, String> {
     };
 
     Ok(root)
+}
+
+pub fn status(verb: &str, msg: &str) {
+    eprintln!("{verb:>12} {msg}");
 }
 
 fn bios_cflags(root: &Path) -> Vec<String> {
@@ -234,7 +233,7 @@ fn build_native_cart(sources: &[PathBuf], out_dir: &Path, name: &str) -> Result<
     args.extend(sources.iter().map(|p| s(p)));
     args.extend(["-o".to_owned(), s(&elf)]);
 
-    eprintln!("building cart {name} (native)...");
+    status("Compiling", name);
     run("m68k-elf-gcc", &args, None)?;
     run(
         "m68k-elf-objcopy",
