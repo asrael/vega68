@@ -22,10 +22,6 @@ pub enum CartError {
     Truncated,
 }
 
-pub struct CartHeader {
-    pub entry: u32,
-}
-
 impl std::fmt::Display for CartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -40,7 +36,7 @@ impl std::fmt::Display for CartError {
     }
 }
 
-pub fn parse(file: &[u8]) -> Result<CartHeader, CartError> {
+pub fn parse(file: &[u8]) -> Result<u32, CartError> {
     if file.len() < HEADER_LEN {
         return Err(CartError::Truncated);
     }
@@ -78,7 +74,7 @@ pub fn parse(file: &[u8]) -> Result<CartHeader, CartError> {
         return Err(CartError::OddEntry(entry));
     }
 
-    Ok(CartHeader { entry })
+    Ok(entry)
 }
 
 #[cfg(test)]
@@ -122,18 +118,28 @@ fn test_header(entry: u32, payload: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn native_with_entry(entry: u32) -> Vec<u8> {
+        let mut f = test_native_cart(&[0x60, 0xfe]);
+
+        f[8..12].copy_from_slice(&entry.to_be_bytes());
+
+        f
+    }
+
     #[test]
     fn accepts_entry_at_payload_start() {
-        let h = parse(&native_with_entry(CART_BASE + HEADER_LEN as u32)).unwrap();
-
-        assert_eq!(h.entry, CART_BASE + HEADER_LEN as u32);
+        assert_eq!(
+            parse(&native_with_entry(CART_BASE + HEADER_LEN as u32)).unwrap(),
+            CART_BASE + HEADER_LEN as u32
+        );
     }
 
     #[test]
     fn parses_native_header() {
-        let h = parse(&test_native_cart(&[0x60, 0xfe])).unwrap();
-
-        assert_eq!(h.entry, CART_BASE + HEADER_LEN as u32);
+        assert_eq!(
+            parse(&test_native_cart(&[0x60, 0xfe])).unwrap(),
+            CART_BASE + HEADER_LEN as u32
+        );
     }
 
     #[test]
@@ -206,13 +212,5 @@ mod tests {
         f[7] = 1;
 
         assert_eq!(parse(&f).err(), Some(CartError::BadVersion(1)));
-    }
-
-    fn native_with_entry(entry: u32) -> Vec<u8> {
-        let mut f = test_native_cart(&[0x60, 0xfe]);
-
-        f[8..12].copy_from_slice(&entry.to_be_bytes());
-
-        f
     }
 }

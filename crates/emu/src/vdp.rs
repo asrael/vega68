@@ -196,6 +196,11 @@ mod tests {
         mem[PALETTE_BASE as usize + i * 4..][..4].copy_from_slice(&rgb.to_be_bytes());
     }
 
+    fn set_scroll(mem: &mut [u8], n: usize, h: u16, v: u16) {
+        mem[SCROLL + n * 4..][..2].copy_from_slice(&h.to_be_bytes());
+        mem[SCROLL + n * 4 + 2..][..2].copy_from_slice(&v.to_be_bytes());
+    }
+
     fn set_sprite(mem: &mut [u8], i: usize, x: i16, y: i16, ctrl: u16, attr: u16) {
         let e = SPRITES + i * 8;
 
@@ -259,11 +264,6 @@ mod tests {
 
         render(&m, 0, &mut out);
         assert_eq!(out[0], 0);
-    }
-
-    fn set_scroll(mem: &mut [u8], n: usize, h: u16, v: u16) {
-        mem[SCROLL + n * 4..][..2].copy_from_slice(&h.to_be_bytes());
-        mem[SCROLL + n * 4 + 2..][..2].copy_from_slice(&v.to_be_bytes());
     }
 
     #[test]

@@ -41,8 +41,10 @@ pub fn assert_cart(fixture: &str, expected: &str) -> Option<System> {
     Some(sys)
 }
 
-pub fn bios_section(name: &str) -> (u32, u32, u32) {
-    xtask::bios_section(name).unwrap()
+pub fn bios_rom() -> Vec<u8> {
+    let rom = xtask::repo_root().unwrap().join("bios/vega68.rom");
+
+    std::fs::read(&rom).unwrap_or_else(|e| panic!("{}: {e}", rom.display()))
 }
 
 pub fn bios_symbol(name: &str) -> u32 {
@@ -51,20 +53,6 @@ pub fn bios_symbol(name: &str) -> u32 {
 
 pub fn build(fixture: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     build_dir(&format!("crates/emu/tests/fixtures/{fixture}"))
-}
-
-pub fn build_dir(rel: &str) -> Option<(Vec<u8>, Vec<u8>)> {
-    let bios = build_bios()?;
-    let dir = xtask::repo_root().unwrap().join(rel);
-    let v68 = xtask::build_cart(&dir, Path::new(env!("CARGO_TARGET_TMPDIR"))).unwrap();
-
-    Some((bios, std::fs::read(&v68).unwrap()))
-}
-
-pub fn bios_rom() -> Vec<u8> {
-    let rom = xtask::repo_root().unwrap().join("bios/vega68.rom");
-
-    std::fs::read(&rom).unwrap_or_else(|e| panic!("{}: {e}", rom.display()))
 }
 
 pub fn build_bios() -> Option<Vec<u8>> {
@@ -76,6 +64,14 @@ pub fn build_bios() -> Option<Vec<u8>> {
     }
 
     Some(std::fs::read(xtask::build_bios().unwrap()).unwrap())
+}
+
+pub fn build_dir(rel: &str) -> Option<(Vec<u8>, Vec<u8>)> {
+    let bios = build_bios()?;
+    let dir = xtask::repo_root().unwrap().join(rel);
+    let v68 = xtask::build_cart(&dir, Path::new(env!("CARGO_TARGET_TMPDIR"))).unwrap();
+
+    Some((bios, std::fs::read(&v68).unwrap()))
 }
 
 pub fn run_until(sys: &mut System, from: usize, needle: &str) {

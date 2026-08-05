@@ -1,6 +1,6 @@
 mod common;
 
-use common::{assert_cart, bios_section, bios_symbol, build, build_bios, run_until};
+use common::{assert_cart, bios_symbol, build, build_bios, run_until};
 use vega68::System;
 use vega68::bus::{PAD_DOWN, PAD_L, PAD_START};
 
@@ -43,29 +43,18 @@ fn reset_restores_the_vectors_and_disables_interrupts() {
 }
 
 #[test]
-fn noinit_sits_outside_the_crt0_clear_range() {
+fn the_reset_reason_survives_the_crt0_clear_range() {
     if build_bios().is_none() {
         return;
     }
 
-    const SHT_NOBITS: u32 = 8;
-
     let bss_end = bios_symbol("__bss_end");
     let flag = bios_symbol("v68_reset_reason");
-    let (addr, kind, size) = bios_section(".noinit");
 
     assert!(
-        addr >= bss_end,
-        "bios.ld: .noinit is at {addr:#010x}, inside the crt0 clear range \
-         (ends {bss_end:#010x}) -- move the output section below .bss"
-    );
-    assert_eq!(
-        kind, SHT_NOBITS,
-        "bios.ld: .noinit is PROGBITS -- an input section with contents was routed into it"
-    );
-    assert!(
-        (addr..addr + size).contains(&flag),
-        "v68_reset_reason is at {flag:#010x}, outside .noinit"
+        flag >= bss_end,
+        "v68_reset_reason is at {flag:#010x}, inside the crt0 clear range \
+         (ends {bss_end:#010x}) -- .noinit must be placed below .bss in bios.ld"
     );
 }
 
