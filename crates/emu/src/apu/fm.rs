@@ -662,14 +662,14 @@ mod tests {
         let mut c = Apu::new();
         let low_arm = drain_frames(&mut c, false, low, high);
 
-        assert_eq!(per_op_arm, 1, "MEASURED: per-op freq's keycode drain");
+        assert_eq!(per_op_arm, 1, "per-op freq's keycode drain");
         assert_eq!(
             high_arm, 1,
-            "MEASURED: high-pitch channel freq's keycode drain"
+            "high-pitch channel freq's keycode drain"
         );
         assert_eq!(
             low_arm, 19,
-            "MEASURED: low-pitch channel freq's keycode drain"
+            "low-pitch channel freq's keycode drain"
         );
         assert_eq!(
             per_op_arm, high_arm,

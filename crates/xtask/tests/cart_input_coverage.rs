@@ -106,7 +106,7 @@ fn devkit_header_change_forces_a_cart_rebuild() {
     let v68 = xtask::build_cart(&cart_dir, &out_dir).unwrap();
 
     let devkit_hw = root.join("devkit/vega68_hw.h");
-    let other_devkit: Vec<PathBuf> = gather(&root.join("devkit"), &["h", "ld"])
+    let other_devkit: Vec<PathBuf> = gather(&root.join("devkit"), &["c", "h", "ld"])
         .into_iter()
         .filter(|p| *p != devkit_hw)
         .collect();
@@ -161,7 +161,7 @@ fn bios_sym_change_forces_a_cart_rebuild() {
     let v68 = xtask::build_cart(&cart_dir, &out_dir).unwrap();
 
     let bios_sym = root.join("target/bios/bios.sym");
-    let devkit_files = gather(&root.join("devkit"), &["h", "ld"]);
+    let devkit_files = gather(&root.join("devkit"), &["c", "h", "ld"]);
 
     let control_max = [
         mtime(&root.join("carts/cart.ld")),
@@ -191,5 +191,60 @@ fn bios_sym_change_forces_a_cart_rebuild() {
         rebuilt, threshold,
         "build_cart did not rebuild a cart with a newer target/bios/bios.sym — \
          bios.sym dropped out of build_cart's tracked input set"
+    );
+}
+
+#[test]
+fn devkit_source_change_forces_a_cart_rebuild() {
+    if !tool_available("m68k-elf-gcc") {
+        eprintln!("skipping: m68k-elf-gcc not on PATH");
+        return;
+    }
+
+    let _held = serialize();
+    let root = xtask::repo_root().unwrap();
+    let out_dir = out_dir("cart_input_coverage_devkit_src");
+    let cart_dir = out_dir.join("cart_src");
+
+    copy_cart_backdated(&root.join("carts/hello"), &cart_dir);
+    xtask::build_bios().unwrap();
+
+    let v68 = xtask::build_cart(&cart_dir, &out_dir).unwrap();
+
+    let devkit_sound = root.join("devkit/vega68_sound.c");
+    let other_devkit: Vec<PathBuf> = gather(&root.join("devkit"), &["c", "h", "ld"])
+        .into_iter()
+        .filter(|p| *p != devkit_sound)
+        .collect();
+
+    let control_max = [
+        mtime(&root.join("carts/cart.ld")),
+        mtime(&root.join("carts/crt0.s")),
+        mtime(&root.join("target/bios/bios.sym")),
+    ]
+    .into_iter()
+    .chain(other_devkit.iter().map(|p| mtime(p)))
+    .max()
+    .unwrap();
+
+    let threshold = control_max + Duration::from_secs(1);
+    let bumped = threshold + Duration::from_secs(1);
+    let guard = MtimeGuard {
+        original: mtime(&devkit_sound),
+        path: devkit_sound.clone(),
+    };
+
+    set_mtime(&devkit_sound, bumped);
+    set_mtime(&v68, threshold);
+
+    let v68_again = xtask::build_cart(&cart_dir, &out_dir).unwrap();
+    let rebuilt = mtime(&v68_again);
+
+    drop(guard);
+
+    assert_ne!(
+        rebuilt, threshold,
+        "build_cart did not rebuild a cart with a newer devkit/vega68_sound.c — \
+         the devkit source glob dropped out of build_cart's tracked input set"
     );
 }

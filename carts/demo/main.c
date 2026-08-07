@@ -1,4 +1,5 @@
 #include "vega68_hw.h"
+#include "vega68_sound.h"
 
 #define BG_TILE     5
 #define BRIGHT_STEP 4
@@ -9,6 +10,57 @@
 #define SPRITE_BODY 0x00FF8000
 #define SPRITE_EDGE 0x00FFFFFF
 #define SPRITE_TILE 1
+
+// intro (once): brass call, harp answers with a rising 16th flourish
+static const char *intro_lead[] = { "c4 e4 g4 c5", "c5" };
+static const char *intro_harp[] = {
+    "~",
+    "[c5 e5 g5 c6] [e5 g5 c6 e6] [g5 c6 e6 g6] [c6 e6 g6 c6]",
+};
+static const V68Track intro_tracks[] = {
+    { .bars = intro_lead, .bar_count = 2, .patch = V68_PATCH_BRASS, .ch = 0 },
+    { .bars = intro_harp, .bar_count = 2, .patch = V68_PATCH_HARP, .ch = 1 },
+};
+static const V68Section intro_section = { .tracks = intro_tracks, .track_count = 2, .bar_frames = 90 };
+
+static const char *body_lead[] = {
+    "c4 e4 g4 c5",
+    "f4 a4 c5 f5",
+    "g4 b4 d5 g5",
+    "e5@2 d5 c5",
+};
+static const char *body_harp[] = {
+    "[c3 e3 g3 c4] [c3 e3 g3 c4] [c3 e3 g3 c4] [c3 e3 g3 c4]",
+    "[f3 a3 c4 f4] [f3 a3 c4 f4] [f3 a3 c4 f4] [f3 a3 c4 f4]",
+    "[g3 b3 d4 g4] [g3 b3 d4 g4] [g3 b3 d4 g4] [g3 b3 d4 g4]",
+    "[c4 g3 e3 c3] [c4 g3 e3 c3] [c4 g3 e3 c3] [c4 g3 e3 c3]",
+};
+static const char *body_strings[] = { "c4", "-", "g3", "e4" };
+static const char *body_bass[] = {
+    "c2 g2 c2 g2",
+    "f2 c3 f2 c3",
+    "g2 d3 g2 d3",
+    "c2 g2 c2 g2",
+};
+static const char *body_perc[] = {
+    "k ~ h ~ k s h ~",
+    "k ~ h s k s h ~",
+    "k ~ h ~ k s h ~",
+    "k ~ h s k h s h",
+};
+static const V68Track body_tracks[] = {
+    { body_lead, 4, V68_PATCH_BRASS, 0, 0 },
+    { body_harp, 4, V68_PATCH_HARP, 1, 0 },
+    { body_strings, 4, V68_PATCH_STRINGS, 2, 0 },
+    { body_bass, 4, V68_PATCH_BASS, 3, 0 },
+    { body_perc, 4, V68_PATCH_PERC, 11, 0, 6 },
+};
+static const V68Section body_section = { .tracks = body_tracks, .track_count = 5, .bar_frames = 90 };
+
+static const V68Section fanfare_sections[] = { intro_section, body_section };
+static const V68Song fanfare = { .sections = fanfare_sections, .section_count = 2, .loop_section = 1 };
+
+static const u8 echo_fir[8] = { 90, 40, 18, 8, 4, 2, 1, 1 }; // dark set: hall tail, no ring
 
 static u32 dim(u32 rgb, u32 b) {
     return ((((rgb >> 16) & 0xFF) * b / 255) << 16) |
@@ -37,6 +89,13 @@ static void setup(void) {
     V68_PALETTE[0] = 0x00102040;
     V68_PALETTE[1] = 0x003A3050;
 
+    *V68_AUDIO_EDELAY = 20; // 80 ms
+    *V68_AUDIO_EFB = 70;
+    *V68_AUDIO_EVOL_L = 80;
+    *V68_AUDIO_EVOL_R = 80;
+    for (u8 i = 0; i < 8; i++)
+        V68_AUDIO_EFIR[i] = echo_fir[i];
+
     load_checker(BG_TILE);
     load_box(SPRITE_TILE);
 
@@ -55,6 +114,9 @@ void main(void) {
     v68_irq_init();
     v68_vblank_on();
     setup();
+
+    if (v68_song_start(&fanfare) != 0)
+        v68_puts("demo: song failed\n");
 
     for (u32 b = 0; b < 255; b += FADE_STEP) {
         V68_PALETTE[2] = dim(SPRITE_BODY, b);

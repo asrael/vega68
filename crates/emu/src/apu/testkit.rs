@@ -52,6 +52,19 @@ pub(super) fn fm_setup(a: &mut Apu, ch: usize, alg: u8, fnum: u16, block: u8) {
     write_be16(a, base + 0x1C, ((block as u16) << 11) | fnum);
 }
 
+pub(super) fn pcm_setup(a: &mut Apu, start: u32, len: u32, rate: u16) {
+    let base = 12 * 0x40;
+
+    for (off, v) in start.to_be_bytes().iter().enumerate() {
+        a.write(base + off as u32, *v);
+    }
+    for (off, v) in len.to_be_bytes().iter().enumerate() {
+        a.write(base + 4 + off as u32, *v);
+    }
+    a.write(base + 0x0C, (rate >> 8) as u8);
+    a.write(base + 0x0D, rate as u8);
+}
+
 pub(super) fn cycles_per_second(a: &mut Apu) -> usize {
     let (mut edges, mut last) = (0, 0i16);
 

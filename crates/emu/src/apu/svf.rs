@@ -83,7 +83,7 @@ mod tests {
     #[test]
     fn cutoff_map_is_exponential_20hz_to_20khz() {
         assert!((Apu::filter_hz(0) - 20.0).abs() < 0.001);
-        // MEASURED: 20*2^(65535/6553.6); u16 max is one unit short of 10 octaves.
+        // 20*2^(65535/6553.6); u16 max is one unit short of 10 octaves.
         assert!((Apu::filter_hz(65535) - 20477.834029605638).abs() < 0.01);
         assert!(
             (Apu::filter_hz(6554) - 40.0).abs() < 0.01,

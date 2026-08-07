@@ -74,6 +74,18 @@ pub fn build_dir(rel: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     Some((bios, std::fs::read(&v68).unwrap()))
 }
 
+pub fn fnv1a64(frame: &[i16]) -> u64 {
+    let mut h = 0xcbf2_9ce4_8422_2325u64;
+
+    for s in frame {
+        for b in s.to_le_bytes() {
+            h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+    }
+
+    h
+}
+
 pub fn run_until(sys: &mut System, from: usize, needle: &str) {
     let want = needle.as_bytes();
 

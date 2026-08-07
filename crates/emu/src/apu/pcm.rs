@@ -75,19 +75,6 @@ mod tests {
     use super::*;
     use crate::apu::testkit::*;
 
-    fn pcm_setup(a: &mut Apu, start: u32, len: u32, rate: u16) {
-        let base = 12 * 0x40;
-
-        for (off, v) in start.to_be_bytes().iter().enumerate() {
-            a.write(base + off as u32, *v);
-        }
-        for (off, v) in len.to_be_bytes().iter().enumerate() {
-            a.write(base + 4 + off as u32, *v);
-        }
-        a.write(base + 0x0C, (rate >> 8) as u8);
-        a.write(base + 0x0D, rate as u8);
-    }
-
     #[test]
     fn pcm_plays_signed_bytes_at_the_programmed_rate_and_stops() {
         let mut mem = vec![0u8; 0x100];
@@ -99,7 +86,7 @@ mod tests {
 
         a.run_line(&mem, 0);
         assert_eq!(
-            a.frame[0], 5418,
+            a.frame[0], 10837,
             "first sample not at the expected full-scale level"
         );
 
@@ -146,7 +133,7 @@ mod tests {
         a.write(12 * 0x40 + 0x10, 0x01); // loop enable
         a.write(KEYON_ADDR, 0x1C);
 
-        // MEASURED: pos crosses LEN=8 on the 10th sample (9*5/6=7.5,
+        // pos crosses LEN=8 on the 10th sample (9*5/6=7.5,
         // +5/6=8.3333 >= 8), wrapping to LOOP(2) + (8.3333-8) = 2.3333...
         for _ in 0..10 {
             a.pcm(12, &mem);

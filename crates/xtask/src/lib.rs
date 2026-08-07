@@ -104,6 +104,7 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
     let carts = root.join("carts");
     let name = cart_name(cart_dir)?;
     let sources = cart_sources(cart_dir)?;
+    let devkit_sources = find_files(&root.join("devkit"), &["c"])?;
     let elf = out_dir.join(format!("{name}.elf"));
     let v68 = out_dir.join(format!("{name}.v68"));
     let stamp = out_dir.join(format!("{name}.inputs"));
@@ -122,10 +123,12 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
         s(&carts.join("crt0.s")),
     ]);
     args.extend(sources.iter().map(|p| s(p)));
+    args.extend(devkit_sources.iter().map(|p| s(p)));
 
     let mut inputs = find_files(cart_dir, &["c", "h", "ld"])?;
 
     inputs.extend(find_files(&root.join("devkit"), &["h", "ld"])?);
+    inputs.extend(devkit_sources.clone());
     inputs.push(carts.join("cart.ld"));
     inputs.push(carts.join("crt0.s"));
     inputs.push(root.join("target/bios/bios.sym"));
@@ -216,6 +219,7 @@ fn cflags(opt: &str) -> Vec<String> {
         "-nostdlib",
         "-std=c99",
         "-Wall",
+        "-fno-auto-inc-dec",
     ]
     .map(String::from)
     .into()

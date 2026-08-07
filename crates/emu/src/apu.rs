@@ -16,12 +16,20 @@ pub const PAN_OFF: [usize; 14] = [
 ];
 pub const SAMPLES_PER_LINE: usize = 4;
 
+/// 255 max delay steps * 192 samples/step (4 ms @ 48 kHz) + 192 rounding + 8 FIR history.
+const ECHO_RING_LEN: usize = 49_160;
+const EDELAY: u32 = GLOBAL + 0x12;
+const EFB: u32 = GLOBAL + 0x13;
+const EFIR: u32 = GLOBAL + 0x16;
+const ESEND: u32 = GLOBAL + 0x10;
+const EVOL_L: u32 = GLOBAL + 0x14;
+const EVOL_R: u32 = GLOBAL + 0x15;
 const GLOBAL: u32 = 0x400;
 const KEYON: u32 = GLOBAL;
 const LFO: u32 = GLOBAL + 1;
 /// LFO reg [2:0] rate index -> Hz.
 const LFO_RATE_HZ: [f64; 8] = [3.98, 5.56, 6.02, 6.37, 6.88, 9.63, 48.1, 72.2];
-const MASTER: f64 = 1.0 / 6.0;
+const MASTER: f64 = 1.0 / 3.0; // pinned by listening 2026-08-07; was the provisional 1/6
 const REGS: usize = 0x500;
 const SAMPLE_RATE: f64 = 48_000.0;
 const STATUS: u32 = GLOBAL + 2;
@@ -40,6 +48,8 @@ fn tri(phase: f64) -> f64 {
 }
 
 pub struct Apu {
+    echo_pos: usize,
+    echo_ring: Vec<f64>,
     eg_acc: f64,
     eg_counter: u32,
     flfo_phase: [f64; CH_COUNT],
@@ -61,6 +71,8 @@ pub struct Apu {
 impl Default for Apu {
     fn default() -> Apu {
         Apu {
+            echo_pos: 0,
+            echo_ring: vec![0.0; 2 * ECHO_RING_LEN],
             eg_acc: 0.0,
             eg_counter: 0,
             flfo_phase: [0.0; CH_COUNT],
@@ -169,7 +181,9 @@ impl Apu {
             self.lfo_phase = (self.lfo_phase + hz / SAMPLE_RATE).fract();
         }
 
+        let esend = u16::from_be_bytes([self.regs[ESEND as usize], self.regs[ESEND as usize + 1]]);
         let (mut l, mut r) = (0.0, 0.0);
+        let (mut echo_l, mut echo_r) = (0.0, 0.0);
 
         for ch in 0..CH_COUNT {
             let src = match ch {
@@ -181,13 +195,43 @@ impl Apu {
             };
             let s = self.filter(ch, src);
             let pan = self.regs[ch * 0x40 + PAN_OFF[ch]];
+            let sent = esend & (1 << ch) != 0;
 
             if pan & 0x80 != 0 {
                 l += s;
+                if sent {
+                    echo_l += s;
+                }
             }
             if pan & 0x40 != 0 {
                 r += s;
+                if sent {
+                    echo_r += s;
+                }
             }
+        }
+
+        let edelay = self.regs[EDELAY as usize] as usize;
+        if edelay != 0 {
+            let delay = edelay * 192; // 4 ms steps at 48 kHz
+            let n = self.echo_ring.len() / 2;
+            let fir_at = |side: usize, pos: usize| -> f64 {
+                (0..8).fold(0.0, |acc, i| {
+                    let tap = self.regs[EFIR as usize + i] as i8 as f64 / 128.0;
+                    let p = (pos + n - delay - i) % n;
+                    acc + tap * self.echo_ring[p * 2 + side]
+                })
+            };
+            let (f_l, f_r) = (fir_at(0, self.echo_pos), fir_at(1, self.echo_pos));
+            let evol_l = self.regs[EVOL_L as usize] as i8 as f64 / 128.0;
+            let evol_r = self.regs[EVOL_R as usize] as i8 as f64 / 128.0;
+            let efb = self.regs[EFB as usize] as i8 as f64 / 128.0;
+
+            l += f_l * evol_l;
+            r += f_r * evol_r;
+            self.echo_ring[self.echo_pos * 2] = echo_l + f_l * efb;
+            self.echo_ring[self.echo_pos * 2 + 1] = echo_r + f_r * efb;
+            self.echo_pos = (self.echo_pos + 1) % n;
         }
 
         self.sync_wrap = self.sync_wrap_next;
@@ -367,5 +411,121 @@ mod tests {
             0,
             "released FM channel still reads audible"
         );
+    }
+
+    fn set_echo(a: &mut Apu, esend: u16, edelay: u8, efb: i8, evol: i8) {
+        a.write(0x410, (esend >> 8) as u8);
+        a.write(0x411, esend as u8);
+        a.write(0x412, edelay);
+        a.write(0x413, efb as u8);
+        a.write(0x414, evol as u8);
+        a.write(0x415, evol as u8);
+        a.write(0x416, 127); // identity-ish FIR: tap 0 only
+    }
+
+    #[test]
+    fn echo_repeats_an_impulse_at_the_programmed_delay() {
+        // 1-sample full-scale PCM impulse, echo-sent, delay 1 step = 192 samples
+        let mut mem = vec![0u8; 16];
+        mem[0] = 0x7F;
+
+        let mut a = Apu::new();
+        pcm_setup(&mut a, 0, 1, 48000);
+        set_echo(&mut a, 1 << 12, 1, 0, 127);
+        a.write(KEYON_ADDR, 0x1C);
+        run_frame(&mut a, &mem);
+
+        assert_eq!(a.frame[0], 10837, "dry impulse moved or rescaled");
+        let idx = |s: usize| s * 2; // left sample s
+        assert_eq!(
+            a.frame[idx(192)],
+            10668, /* 10837*(127/128)^2 truncated */
+            "echo not at delay"
+        );
+        let stray = a
+            .frame
+            .iter()
+            .enumerate()
+            .filter(|&(i, &s)| s != 0 && i != 0 && i != 1 && i / 2 != 192)
+            .count();
+        assert_eq!(stray, 0, "echo leaked outside the impulse and its single repeat");
+    }
+
+    #[test]
+    fn feedback_produces_decaying_repeats() {
+        let mut mem = vec![0u8; 16];
+        mem[0] = 0x7F;
+
+        let mut a = Apu::new();
+        pcm_setup(&mut a, 0, 1, 48000);
+        set_echo(&mut a, 1 << 12, 1, 64, 127); // efb = 0.5
+        a.write(KEYON_ADDR, 0x1C);
+        run_frame(&mut a, &mem);
+
+        let e1 = a.frame[192 * 2];
+        let e2 = a.frame[384 * 2];
+        let e3 = a.frame[576 * 2];
+        assert!(e1 > e2 && e2 > e3 && e3 > 0, "repeats must decay monotonically: {e1} {e2} {e3}");
+        assert_eq!(e2, 5292, "second repeat drifted");
+    }
+
+    #[test]
+    fn esend_gates_the_echo_and_delay_zero_disables_it() {
+        let mut mem = vec![0u8; 16];
+        mem[0] = 0x7F;
+
+        // sent but delay 0: no echo at all
+        let mut a = Apu::new();
+        pcm_setup(&mut a, 0, 1, 48000);
+        set_echo(&mut a, 1 << 12, 0, 64, 127);
+        a.write(KEYON_ADDR, 0x1C);
+        run_frame(&mut a, &mem);
+        assert!(a.frame[2..].iter().all(|&s| s == 0), "delay 0 must disable the echo path");
+
+        // delay set but channel not sent
+        let mut b = Apu::new();
+        pcm_setup(&mut b, 0, 1, 48000);
+        set_echo(&mut b, 0, 1, 64, 127);
+        b.write(KEYON_ADDR, 0x1C);
+        run_frame(&mut b, &mem);
+        assert!(b.frame[2..].iter().all(|&s| s == 0), "unsent channel leaked into the echo bus");
+    }
+
+    #[test]
+    fn a_dark_fir_set_attenuates_the_repeat_vs_identity() {
+        let dark: [i8; 8] = [58, 30, 20, 10, 5, 2, 1, 1]; // lowpass-ish, sums < 128
+        let run = |fir: Option<&[i8; 8]>| {
+            let mut mem = vec![0u8; 16];
+            mem[0] = 0x7F;
+            let mut a = Apu::new();
+            pcm_setup(&mut a, 0, 1, 48000);
+            set_echo(&mut a, 1 << 12, 1, 0, 127);
+            if let Some(f) = fir {
+                for (i, &t) in f.iter().enumerate() {
+                    a.write(0x416 + i as u32, t as u8);
+                }
+            }
+            a.write(KEYON_ADDR, 0x1C);
+            run_frame(&mut a, &mem);
+            a.frame[192 * 2]
+        };
+
+        assert!(run(Some(&dark)) < run(None), "FIR taps had no effect on the repeat");
+    }
+
+    #[test]
+    fn reset_clears_the_echo_ring() {
+        let mut mem = vec![0u8; 16];
+        mem[0] = 0x7F;
+
+        let mut a = Apu::new();
+        pcm_setup(&mut a, 0, 1, 48000);
+        set_echo(&mut a, 1 << 12, 100, 100, 127); // long tail
+        a.write(KEYON_ADDR, 0x1C);
+        run_frame(&mut a, &mem);
+
+        a.reset();
+        run_frame(&mut a, &[]);
+        assert!(a.frame.iter().all(|&s| s == 0), "reset left echo history ringing");
     }
 }

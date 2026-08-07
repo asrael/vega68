@@ -43,10 +43,16 @@ typedef ptrdiff_t isize;
 #define V68_DEBUG_PUTC        ((volatile u16 *)0xFF000200)
 #define V68_RESET_REASON      ((volatile u16 *)0xFF000300)
 
-#define V68_AUDIO_CH(n)  ((volatile u8 *)(0xFF000400 + (n) * 0x40))
-#define V68_AUDIO_KEYON  ((volatile u8 *)0xFF000800)
-#define V68_AUDIO_LFO    ((volatile u8 *)0xFF000801)
-#define V68_AUDIO_STATUS ((volatile u16 *)0xFF000802)
+#define V68_AUDIO_CH(n)   ((volatile u8 *)(0xFF000400 + (n) * 0x40))
+#define V68_AUDIO_KEYON   ((volatile u8 *)0xFF000800)
+#define V68_AUDIO_LFO     ((volatile u8 *)0xFF000801)
+#define V68_AUDIO_STATUS  ((volatile u16 *)0xFF000802)
+#define V68_AUDIO_ESEND   ((volatile u16 *)0xFF000810)
+#define V68_AUDIO_EDELAY  ((volatile u8 *)0xFF000812)
+#define V68_AUDIO_EFB     ((volatile u8 *)0xFF000813)
+#define V68_AUDIO_EVOL_L  ((volatile u8 *)0xFF000814)
+#define V68_AUDIO_EVOL_R  ((volatile u8 *)0xFF000815)
+#define V68_AUDIO_EFIR    ((volatile u8 *)0xFF000816)
 
 #define V68_VBLANK    0x8000
 #define V68_LINE_MASK 0x00FF
@@ -100,6 +106,7 @@ void __attribute__((noreturn)) v68_reset(void);
 __attribute__((weak)) volatile bool v68_frame_ready = false;
 __attribute__((weak)) void v68_hblank_hook(u16 line);
 __attribute__((weak)) void v68_vblank_hook(void);
+__attribute__((weak)) void v68_sound_tick(void);
 
 V68_INTERRUPT static void v68_on_hblank(void) {
     if (v68_hblank_hook)
@@ -118,8 +125,10 @@ static inline void v68_hblank_on(u16 first, u16 every) {
 static inline void v68_wait_vblank(void) {
     while (!v68_frame_ready) {}
     v68_frame_ready = false;
-}
 
+    if (v68_sound_tick)
+        v68_sound_tick();
+}
 
 V68_INTERRUPT static void v68_on_vblank(void) {
     if (v68_vblank_hook)
