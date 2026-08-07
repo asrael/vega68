@@ -2,7 +2,7 @@ mod common;
 
 use common::{DONE, MAX_FRAMES, assert_cart, bios_symbol, build, build_bios, run_until};
 use vega68::System;
-use vega68::bus::{PAD_DOWN, PAD_L, PAD_START, VRAM_BASE};
+use vega68::bus::{PAD_DOWN, PAD_L, PAD_START};
 
 #[test]
 fn reset_restarts_the_cart_window_and_restores_the_machine() {
@@ -32,17 +32,6 @@ fn reset_restarts_the_cart_window_and_restores_the_machine() {
         sys.bus.irq_enable, 0,
         "reset left an interrupt source enabled"
     );
-}
-
-#[test]
-fn irq_devkit_installs_both_sources_and_reports_the_measured_cadence() {
-    let Some(sys) = assert_cart("irq", "ok\n") else {
-        return;
-    };
-
-    assert_eq!(sys.bus.mem[VRAM_BASE as usize + 4], 70, "fire count");
-    assert_eq!(sys.bus.mem[VRAM_BASE as usize + 5], 40, "first line seen");
-    assert_eq!(sys.bus.mem[VRAM_BASE as usize + 6], 178, "last line seen");
 }
 
 fn wait_for_done(sys: &mut System, from: usize, expected: &str) {

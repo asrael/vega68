@@ -43,6 +43,11 @@ typedef ptrdiff_t isize;
 #define V68_DEBUG_PUTC        ((volatile u16 *)0xFF000200)
 #define V68_RESET_REASON      ((volatile u16 *)0xFF000300)
 
+#define V68_AUDIO_CH(n)  ((volatile u8 *)(0xFF000400 + (n) * 0x40))
+#define V68_AUDIO_KEYON  ((volatile u8 *)0xFF000800)
+#define V68_AUDIO_LFO    ((volatile u8 *)0xFF000801)
+#define V68_AUDIO_STATUS ((volatile u16 *)0xFF000802)
+
 #define V68_VBLANK    0x8000
 #define V68_LINE_MASK 0x00FF
 

@@ -62,6 +62,10 @@ fn header_matches_emulator_abi() {
 
 /// `pub const NAME: u32 = 0xFF00_XXXX;` rows in `bus.rs`, keyed by name.
 /// `MMIO_BASE` itself is the region base, not a register, so it is excluded.
+/// `AUDIO_*` range markers are excluded: the audio block is byte-granular
+/// and indexed by the function-like `V68_AUDIO_CH(n)` macro, not the flat
+/// one-name-one-address shape this test diffs; its devkit macros are
+/// checked by the `audio` guest fixture instead (`tests/bios.rs`).
 fn bus_mmio_consts(bus_src: &str) -> BTreeMap<String, u32> {
     bus_src
         .lines()
@@ -72,7 +76,7 @@ fn bus_mmio_consts(bus_src: &str) -> BTreeMap<String, u32> {
             let (value, _) = rest.split_once(';')?;
             let value = value.trim();
 
-            if name == "MMIO_BASE" {
+            if name == "MMIO_BASE" || name.starts_with("AUDIO_") {
                 return None;
             }
 
@@ -104,6 +108,12 @@ fn header_mmio_defines(header: &str) -> BTreeMap<String, u32> {
         .filter_map(|l| {
             let rest = l.trim().strip_prefix("#define V68_")?;
             let (name, rest) = rest.split_once(char::is_whitespace)?;
+
+            // Mirrors bus_mmio_consts's AUDIO_* exclusion above.
+            if name.starts_with("AUDIO_") {
+                return None;
+            }
+
             let idx = rest.find("0x")?;
             let hex: String = rest[idx + 2..]
                 .chars()

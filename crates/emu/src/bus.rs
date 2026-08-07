@@ -1,5 +1,7 @@
 use m68k::{AddressBus, FastMem};
 
+use crate::apu::Apu;
+
 pub const BIOS_SIZE: u32 = 0x0010_0000; // 1 MiB window
 pub const CART_BASE: u32 = 0x0100_0000;
 pub const CART_SIZE: u32 = 0x0100_0000; // 16 MiB max
@@ -13,6 +15,9 @@ pub const PALETTE_BASE: u32 = 0x0308_0000;
 pub const PALETTE_SIZE: u32 = 0x0000_0400; // 256 entries x 4 B
 pub const MEM_END: u32 = PALETTE_BASE + PALETTE_SIZE;
 pub const MMIO_BASE: u32 = 0xFF00_0000;
+pub const AUDIO_BASE: u32 = 0xFF00_0400;
+pub const AUDIO_END: u32 = 0xFF00_0900;
+pub const AUDIO_GLOBAL: u32 = 0xFF00_0800;
 
 pub const VDP_STATUS: u32 = 0xFF00_0000;
 pub const IRQ_ENABLE: u32 = 0xFF00_0004;
@@ -48,6 +53,7 @@ fn printable(b: u8) -> bool {
 }
 
 pub struct Bus {
+    pub apu: Apu,
     pub brightness: u8,
     pub debug_out: Vec<u8>,
     pub irq_enable: u16,
@@ -68,6 +74,7 @@ impl Bus {
         mem[..bios.len()].copy_from_slice(&bios);
 
         Self {
+            apu: Apu::new(),
             brightness: 255,
             debug_out: Vec::new(),
             irq_enable: 0,
@@ -101,7 +108,9 @@ impl Bus {
 
         for i in 0..bytes {
             let a = address.wrapping_add(i as u32);
-            let b = if a >= MMIO_BASE {
+            let b = if (AUDIO_BASE..AUDIO_END).contains(&a) {
+                self.apu.read(a - AUDIO_BASE)
+            } else if a >= MMIO_BASE {
                 *self
                     .mmio_reg(a & !3)
                     .to_be_bytes()
@@ -117,6 +126,21 @@ impl Bus {
     }
 
     fn write(&mut self, address: u32, value: u32, bytes: usize) {
+        // Byte-granular, per byte -- like read(): a write can straddle into
+        // AUDIO_BASE from below (e.g. a word write at AUDIO_BASE-1) even
+        // when the start address itself is not in range.
+        for i in 0..bytes {
+            let a = address.wrapping_add(i as u32);
+
+            if (AUDIO_BASE..AUDIO_END).contains(&a) {
+                self.apu.write(a - AUDIO_BASE, (value >> (8 * (bytes - 1 - i))) as u8);
+            }
+        }
+
+        if (AUDIO_BASE..AUDIO_END).contains(&address) {
+            return;
+        }
+
         if address >= MMIO_BASE {
             match address & !3 {
                 IRQ_ENABLE => self.irq_enable = value as u16 & 0b11,
@@ -294,5 +318,31 @@ mod tests {
 
         assert_eq!(b.irq_pending, 0b10);
         assert_eq!(b.read_word(IRQ_ACK), 0b10);
+    }
+
+    #[test]
+    fn audio_range_is_byte_granular_through_the_bus() {
+        let mut b = bus();
+
+        b.write_byte(AUDIO_BASE + 0x1D, 0xAB); // an odd offset no u16 slot reaches
+        b.write_word(AUDIO_BASE, 0x7101); // spans two byte registers
+
+        assert_eq!(b.read_byte(AUDIO_BASE + 0x1D), 0xAB);
+        assert_eq!(b.read_byte(AUDIO_BASE), 0x71);
+        assert_eq!(b.read_byte(AUDIO_BASE + 1), 0x01);
+        assert_eq!(b.read_word(AUDIO_BASE), 0x7101);
+    }
+
+    #[test]
+    fn a_write_straddling_into_the_audio_range_still_reaches_the_apu() {
+        let mut b = bus();
+
+        b.write_word(AUDIO_BASE - 1, 0xAB71); // second byte lands at APU reg 0
+
+        assert_eq!(
+            b.read_byte(AUDIO_BASE),
+            0x71,
+            "the straddled byte never reached the APU"
+        );
     }
 }

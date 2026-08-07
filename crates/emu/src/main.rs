@@ -11,6 +11,7 @@
 //! headless (CI): runs N frames, printing an fnv1a64 hash of each frame.
 
 use vega68::System;
+use vega68::apu::out::AudioOut;
 use vega68::bus;
 use vega68::vdp::{HEIGHT, WIDTH};
 
@@ -179,6 +180,7 @@ fn main() {
 }
 
 struct Vega68 {
+    audio: Option<AudioOut>,
     frame: Vec<u32>,
     gamepad: u16,
     gilrs: Option<Gilrs>,
@@ -269,6 +271,7 @@ fn run_windowed(sys: System, scale: Option<usize>, watch: Option<Watch>) {
     let event_loop = EventLoop::new().expect("failed to create event loop");
 
     let mut vega68 = Vega68 {
+        audio: AudioOut::new(),
         frame: vec![0u32; WIDTH * HEIGHT],
         gamepad: 0,
         gilrs: Gilrs::new()
@@ -361,6 +364,9 @@ impl ApplicationHandler for Vega68 {
             self.poll_gamepad();
             self.sys.bus.pads[0] = self.pad | self.gamepad | self.stick;
             self.sys.run_frame();
+            if let Some(a) = &self.audio {
+                a.push(&self.sys.bus.apu.frame);
+            }
             self.next_frame = (self.next_frame + FRAME).max(now - FRAME);
 
             if let Some(w) = &self.window {

@@ -1,13 +1,15 @@
 use m68k::{BatchExit, CpuCore, CpuType};
 
+use crate::apu;
 use crate::bus::{Bus, CART_BASE, LINES_PER_FRAME, VISIBLE_LINES};
 use crate::cart::{self, CartError};
 use crate::vdp;
 
-const RESET_RELOAD: u16 = 2;
-
 /// 100 MHz @ ~5 cycles/instruction, 60 fps, 200 lines/frame.
 pub const INSTRUCTIONS_PER_LINE: u32 = 1_667;
+
+const FRAME_SAMPLES: usize = LINES_PER_FRAME as usize * apu::SAMPLES_PER_LINE * 2;
+const RESET_RELOAD: u16 = 2;
 
 pub struct System {
     pub bus: Bus,
@@ -45,6 +47,7 @@ impl System {
 
         self.bus.mem[CART_BASE as usize..CART_BASE as usize + cart.len()].copy_from_slice(cart);
 
+        self.bus.apu.reset();
         self.bus.irq_enable = 0;
         self.bus.irq_pending = 0;
         self.bus.line_compare = 0;
@@ -57,7 +60,21 @@ impl System {
         Ok(())
     }
 
+    pub fn render(&self, out: &mut [u32]) {
+        vdp::render(&self.bus.mem, self.bus.brightness, out);
+    }
+
     pub fn run_frame(&mut self) {
+        let lines_run = self.run_cpu_lines();
+        self.top_up_frame(lines_run);
+    }
+
+    // Runs the CPU line by line, rendering that line's audio as it completes.
+    // Returns how many lines actually got their audio rendered this call --
+    // fewer than LINES_PER_FRAME if the CPU stuck partway through.
+    fn run_cpu_lines(&mut self) -> u32 {
+        let mut lines_run = 0;
+
         'frame: for line in 0..LINES_PER_FRAME {
             self.bus.line = line;
 
@@ -121,16 +138,36 @@ impl System {
 
                 instructions += r.instructions + taken;
             }
+
+            let Bus { apu, mem, .. } = &mut self.bus;
+            apu.run_line(mem, line);
+            lines_run += 1;
         }
+
+        lines_run
     }
 
-    pub fn render(&self, out: &mut [u32]) {
-        vdp::render(&self.bus.mem, self.bus.brightness, out);
+    // A stuck CPU (`run_cpu_lines` returning short) leaves the audio frame
+    // partial; top up the remaining lines so it is always full. Tracking
+    // `lines_run` explicitly (not the frame's own length) matters when the
+    // CPU sticks on line 0 before that line's `apu.run_line` ever runs: the
+    // frame buffer is still whatever the *previous* call to `run_frame` left
+    // it at (a full 1600-sample frame), so a length-based check would no-op
+    // and silently replay stale audio instead of rebuilding this frame.
+    fn top_up_frame(&mut self, mut lines_run: u32) {
+        while lines_run < LINES_PER_FRAME {
+            let Bus { apu, mem, .. } = &mut self.bus;
+            apu.run_line(mem, lines_run);
+            lines_run += 1;
+        }
+
+        debug_assert_eq!(self.bus.apu.frame.len(), FRAME_SAMPLES);
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use m68k::AddressBus;
     use super::*;
     use crate::cart::{HEADER_LEN, test_bios, test_cart};
 
@@ -262,6 +299,7 @@ mod tests {
         m.bus.line_compare = 123;
         m.bus.line_interval = 5;
         m.bus.brightness = 10;
+        m.bus.write_byte(crate::bus::AUDIO_BASE, 0xFF);
 
         m.reload(&test_cart(&[0x60, 0xfe])).unwrap();
 
@@ -270,6 +308,63 @@ mod tests {
         assert_eq!(m.bus.line_compare, 0, "line_compare not reset");
         assert_eq!(m.bus.line_interval, 0, "line_interval not reset");
         assert_eq!(m.bus.brightness, 255, "brightness not reset");
+        assert_eq!(m.bus.read_byte(crate::bus::AUDIO_BASE), 0, "apu register not reset");
+    }
+
+    #[test]
+    fn run_frame_produces_a_full_audio_frame() {
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+
+        m.run_frame();
+        assert_eq!(m.bus.apu.frame.len(), 1600);
+    }
+
+    #[test]
+    fn top_up_rebuilds_a_stale_frame_when_the_cpu_sticks_before_line_zero() {
+        // Regression seam for a bug where the stuck-CPU top-up gated on
+        // `apu.frame.len() < 1600`: if the CPU stuck on line 0 before that
+        // line's `apu.run_line` ran, the frame buffer was still the
+        // *previous* frame's full 1600 samples, so the length check no-oped
+        // and stale audio got replayed. A real zero-instruction CPU stall is
+        // impractical to construct from a test cart (STOP and every
+        // exception path always retire >= 1 instruction in this emulator),
+        // so this exercises the fixed seam (`top_up_frame`, driven by an
+        // explicit `lines_run` count rather than the frame's own length)
+        // directly with `lines_run == 0`, the exact precondition a
+        // stuck-at-line-0 CPU leaves behind.
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+        m.run_frame();
+        let real = m.bus.apu.frame.clone();
+
+        m.bus.apu.frame = vec![i16::MAX; 1600]; // stale sentinel frame, as if never cleared
+        m.top_up_frame(0);
+
+        assert_ne!(
+            m.bus.apu.frame,
+            vec![i16::MAX; 1600],
+            "top-up must not no-op just because the stale frame was already full length"
+        );
+        assert_eq!(
+            m.bus.apu.frame, real,
+            "top-up from line 0 must rebuild the same frame a normal run produces"
+        );
+    }
+
+    #[test]
+    fn a_cart_write_to_the_apu_is_heard_the_same_frame() {
+        // move.w #0x00FE, PERIOD(ch 8); move.b #0, ATTEN — then loop
+        let base = 0xFF00_0400u32 + 8 * 0x40;
+        let mut code = vec![];
+        code.extend([0x33, 0xFC, 0x00, 0xFE]); // move.w #0x00FE, (xxx).l
+        code.extend(base.to_be_bytes());
+        code.extend([0x42, 0x39]); // clr.b (xxx).l
+        code.extend((base + 2).to_be_bytes());
+        code.extend([0x60, 0xFE]); // bra.s *
+
+        let mut m = System::new(&test_bios(), &test_cart(&code)).unwrap();
+        m.run_frame();
+
+        assert!(m.bus.apu.frame.iter().any(|&s| s != 0), "square never reached the mix");
     }
 
     #[test]

@@ -13,6 +13,7 @@ name = "vega68"
 path = "src/main.rs"
 
 [dependencies]
+cpal = "0.16"
 gilrs = "0.11"
 m68k = "0.8"
 softbuffer = "0.4"

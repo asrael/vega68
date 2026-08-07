@@ -68,8 +68,8 @@ fn copy_cart_backdated(src: &Path, dst: &Path) {
 }
 
 struct MtimeGuard {
-    path: PathBuf,
     original: SystemTime,
+    path: PathBuf,
 }
 
 impl Drop for MtimeGuard {
@@ -124,8 +124,8 @@ fn devkit_header_change_forces_a_cart_rebuild() {
     let threshold = control_max + Duration::from_secs(1);
     let bumped = threshold + Duration::from_secs(1);
     let guard = MtimeGuard {
-        path: devkit_hw.clone(),
         original: mtime(&devkit_hw),
+        path: devkit_hw.clone(),
     };
 
     set_mtime(&devkit_hw, bumped);
@@ -175,8 +175,8 @@ fn bios_sym_change_forces_a_cart_rebuild() {
     let threshold = control_max + Duration::from_secs(1);
     let bumped = threshold + Duration::from_secs(1);
     let guard = MtimeGuard {
-        path: bios_sym.clone(),
         original: mtime(&bios_sym),
+        path: bios_sym.clone(),
     };
 
     set_mtime(&bios_sym, bumped);
