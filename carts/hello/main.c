@@ -22,8 +22,8 @@ void main(void) {
     for (i32 g = 0; g < 9; g++)
         for (i32 y = 0; y < 8; y++)
             for (i32 x = 0; x < 8; x++)
-                V68_VRAM[(g + 1) * 64 + y * 8 + x] = (font[g][y] >> (7 - x)) & 1;
+                V68_TILES[g + 1].px[y][x] = (font[g][y] >> (7 - x)) & 1;
 
     for (i32 i = 0; i < 12; i++)
-        V68_TILEMAP(0)[11 * V68_TILEMAP_COLS + 14 + i] = text[i];
+        V68_TILEMAPS[0].cell[11][14 + i] = text[i];
 }

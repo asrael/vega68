@@ -1,4 +1,4 @@
-#include "vega68_sound.h"
+#include "vega68_sfx.h"
 
 #define V68_SOUND_MAX_TRACKS  64 // flat (section,track) cap across a song; generous headroom
 #define V68_GROUP_MAX         32 // top-level or bracket element cap per notation group
@@ -33,25 +33,25 @@ typedef struct {
 } PCtx;
 
 // bit n set = op n is a carrier under algorithm n; vol attenuates carriers only
-static const u8 c_alg_carriers[8] = { 0x08, 0x08, 0x08, 0x08, 0x0A, 0x0E, 0x0E, 0x0F };
+static const u8 alg_carriers[8] = { 0x08, 0x08, 0x08, 0x08, 0x0A, 0x0E, 0x0E, 0x0F };
 
 // PSG plays full scale where FM carries patch TL headroom; this base drop
 // puts a full-level PSG track at the same loudness as a typical FM patch.
 #define V68_PSG_LEVEL_BASE  6
 #define V68_PERC_LEVEL_BASE 3 // transients read quieter than sustained tones; halve their drop
 
-static V68Ev c_pool[V68_SOUND_POOL];
-static u16 c_pool_used;
-static V68TrackLayout c_layout[V68_SOUND_MAX_TRACKS];
-static u16 c_layout_used;
-static const V68Song *c_song;
+static V68Ev pool[V68_SOUND_POOL];
+static u16 pool_used;
+static V68TrackLayout layout[V68_SOUND_MAX_TRACKS];
+static u16 layout_used;
+static const V68Song *playing;
 
 // active-playback state: current section and its track cursors
-static u8  c_section;
-static u16 c_section_base;        // c_layout index where this section's tracks start
-static u8  c_section_tracks;      // == c_song->sections[c_section].track_count
-static u32 c_section_frames_left;
-static V68TrackState c_state[V68_SOUND_MAX_ACTIVE];
+static u8  section;
+static u16 section_base;        // layout index where this section's tracks start
+static u8  section_tracks;      // == playing->sections[section].track_count
+static u32 section_frames_left;
+static V68TrackState state[V68_SOUND_MAX_ACTIVE];
 
 /// block-4 fnums C4..B4, fnum = round(freq * 2^20 / (53267.03 * 8)), A4 = 440 Hz
 const u16 v68_fnum[12] = {
@@ -192,13 +192,13 @@ const V68Patch v68_patches[12] = {
 };
 
 static void sound_clear(void) {
-    c_song                = 0;
-    c_pool_used           = 0;
-    c_layout_used         = 0;
-    c_section             = 0;
-    c_section_base        = 0;
-    c_section_tracks      = 0;
-    c_section_frames_left = 0;
+    playing                = 0;
+    pool_used           = 0;
+    layout_used         = 0;
+    section             = 0;
+    section_base        = 0;
+    section_tracks      = 0;
+    section_frames_left = 0;
 }
 
 static void putdec(u32 v) {
@@ -397,32 +397,32 @@ static bool scan_group(PCtx *ctx, const char *start, const char *end, Elem *out,
 }
 
 static bool emit_note(PCtx *ctx, u8 note, u16 frames) {
-    if (c_pool_used >= V68_SOUND_POOL) {
+    if (pool_used >= V68_SOUND_POOL) {
         ctx->overflow = true;
         return false;
     }
 
-    i32 idx = c_pool_used++;
-    c_pool[idx].note = note;
-    c_pool[idx].frames = frames;
+    i32 idx = pool_used++;
+    pool[idx].note = note;
+    pool[idx].frames = frames;
     ctx->last_event = idx;
     return true;
 }
 
 static bool emit_rest(PCtx *ctx, u16 frames) {
-    if (ctx->last_event >= 0 && c_pool[ctx->last_event].note == 0) {
-        c_pool[ctx->last_event].frames += frames;
+    if (ctx->last_event >= 0 && pool[ctx->last_event].note == 0) {
+        pool[ctx->last_event].frames += frames;
         return true;
     }
 
-    if (c_pool_used >= V68_SOUND_POOL) {
+    if (pool_used >= V68_SOUND_POOL) {
         ctx->overflow = true;
         return false;
     }
 
-    i32 idx = c_pool_used++;
-    c_pool[idx].note = 0;
-    c_pool[idx].frames = frames;
+    i32 idx = pool_used++;
+    pool[idx].note = 0;
+    pool[idx].frames = frames;
     ctx->last_event = idx;
     return true;
 }
@@ -439,7 +439,7 @@ static bool process_leaf(PCtx *ctx, const char *tok, const char *end, u16 frames
             ctx->bad_len = len;
             return false;
         }
-        c_pool[ctx->last_event].frames += frames;
+        pool[ctx->last_event].frames += frames;
         return true;
     }
 
@@ -572,7 +572,7 @@ static bool parse_track(u8 sec, u8 trk, const V68Track *t, u16 bar_frames, i32 *
         .bad_len = 0,
     };
 
-    *first = c_pool_used;
+    *first = pool_used;
 
     for (u8 b = 0; b < t->bar_count; b++) {
         if (!parse_bar(&ctx, t->bars[b], bar_frames)) {
@@ -586,7 +586,7 @@ static bool parse_track(u8 sec, u8 trk, const V68Track *t, u16 bar_frames, i32 *
         }
     }
 
-    *count = c_pool_used - *first;
+    *count = pool_used - *first;
     return true;
 }
 
@@ -618,7 +618,7 @@ static bool parse_section(u8 sec, const V68Section *s) {
             return false;
         }
 
-        if (c_layout_used >= V68_SOUND_MAX_TRACKS) {
+        if (layout_used >= V68_SOUND_MAX_TRACKS) {
             v68_puts("sound: track layout overflow\n");
             return false;
         }
@@ -627,9 +627,9 @@ static bool parse_section(u8 sec, const V68Section *s) {
         if (!parse_track(sec, t, trk, s->bar_frames, &first, &count))
             return false;
 
-        c_layout[c_layout_used].first = (u16)first;
-        c_layout[c_layout_used].count = (u16)count;
-        c_layout_used++;
+        layout[layout_used].first = (u16)first;
+        layout[layout_used].count = (u16)count;
+        layout_used++;
     }
 
     return true;
@@ -666,7 +666,7 @@ static void perc_decay(u8 ch) {
 
 static void dispatch_event(const V68Track *trk, u16 idx) {
     u8 ch = trk->ch;
-    u8 note = c_pool[idx].note;
+    u8 note = pool[idx].note;
 
     if (note == 0) {
         if (ch < 8)
@@ -713,7 +713,7 @@ static u16 section_layout_base(u8 sec) {
     u16 base = 0;
 
     for (u8 s = 0; s < sec; s++)
-        base += c_song->sections[s].track_count;
+        base += playing->sections[s].track_count;
 
     return base;
 }
@@ -727,12 +727,12 @@ static bool section_uses_channel(const V68Section *s, u8 ch) {
 }
 
 static void section_enter(u8 sec) {
-    const V68Section *s = &c_song->sections[sec];
+    const V68Section *s = &playing->sections[sec];
     u16 base = section_layout_base(sec);
     u16 esend = *V68_AUDIO_ESEND;
 
-    if (c_section_tracks > 0) {
-        const V68Section *prev = &c_song->sections[c_section];
+    if (section_tracks > 0) {
+        const V68Section *prev = &playing->sections[section];
 
         for (u8 t = 0; t < prev->track_count; t++) {
             u8 ch = prev->tracks[t].ch;
@@ -749,10 +749,10 @@ static void section_enter(u8 sec) {
         }
     }
 
-    c_section = sec;
-    c_section_base = base;
-    c_section_tracks = s->track_count;
-    c_section_frames_left = (s->track_count > 0) ? (u32)s->tracks[0].bar_count * s->bar_frames : 0;
+    section = sec;
+    section_base = base;
+    section_tracks = s->track_count;
+    section_frames_left = (s->track_count > 0) ? (u32)s->tracks[0].bar_count * s->bar_frames : 0;
 
     for (u8 t = 0; t < s->track_count; t++) {
         const V68Track *trk = &s->tracks[t];
@@ -765,7 +765,7 @@ static void section_enter(u8 sec) {
 
             if (steps > 0) {
                 volatile u8 *pg = V68_AUDIO_CH(trk->ch);
-                u8 carriers = c_alg_carriers[patch->fb_alg & 0x07];
+                u8 carriers = alg_carriers[patch->fb_alg & 0x07];
 
                 for (u8 op = 0; op < 4; op++)
                     if (carriers & (1 << op)) {
@@ -780,28 +780,28 @@ static void section_enter(u8 sec) {
         else
             esend &= (u16)~(1 << trk->ch);
 
-        c_state[t].next_idx = c_layout[base + t].first;
-        c_state[t].frames_left = 0;
+        state[t].next_idx = layout[base + t].first;
+        state[t].frames_left = 0;
     }
 
     *V68_AUDIO_ESEND = esend;
 }
 
 void v68_sound_tick(void) {
-    if (!c_song)
+    if (!playing)
         return;
 
-    const V68Section *s = &c_song->sections[c_section];
+    const V68Section *s = &playing->sections[section];
 
-    for (u8 t = 0; t < c_section_tracks; t++) {
+    for (u8 t = 0; t < section_tracks; t++) {
         const V68Track *trk = &s->tracks[t];
-        V68TrackState *st = &c_state[t];
-        const V68TrackLayout *layout = &c_layout[c_section_base + t];
+        V68TrackState *st = &state[t];
+        const V68TrackLayout *tl = &layout[section_base + t];
         bool dispatched = false;
 
-        while (st->frames_left == 0 && st->next_idx < layout->first + layout->count) {
+        while (st->frames_left == 0 && st->next_idx < tl->first + tl->count) {
             dispatch_event(trk, st->next_idx);
-            st->frames_left = c_pool[st->next_idx].frames;
+            st->frames_left = pool[st->next_idx].frames;
             st->next_idx++;
             dispatched = true;
         }
@@ -813,14 +813,14 @@ void v68_sound_tick(void) {
             st->frames_left--;
     }
 
-    if (c_section_frames_left > 0)
-        c_section_frames_left--;
+    if (section_frames_left > 0)
+        section_frames_left--;
 
-    if (c_section_frames_left == 0) {
-        u8 next = c_section + 1;
+    if (section_frames_left == 0) {
+        u8 next = section + 1;
 
-        if (next >= c_song->section_count)
-            next = c_song->loop_section;
+        if (next >= playing->section_count)
+            next = playing->loop_section;
 
         section_enter(next);
     }
@@ -841,15 +841,15 @@ i32 v68_song_start(const V68Song *song) {
         }
     }
 
-    c_song = song;
+    playing = song;
     section_enter(0);
 
     return 0;
 }
 
 void v68_song_stop(void) {
-    if (c_song && c_section_tracks > 0) {
-        const V68Section *s = &c_song->sections[c_section];
+    if (playing && section_tracks > 0) {
+        const V68Section *s = &playing->sections[section];
 
         for (u8 t = 0; t < s->track_count; t++) {
             u8 ch = s->tracks[t].ch;

@@ -14,8 +14,8 @@ void v68_hblank_hook(u16 line) {
 
 void main(void) {
     v68_irq_init();
-    v68_hblank_on(40, 2);
-    v68_vblank_on();
+    v68_hblank_enable(40, 2);
+    v68_vblank_enable();
 
     v68_wait_vblank();
     V68_VRAM[FIRE_COUNT] = 0;
@@ -24,7 +24,7 @@ void main(void) {
     v68_wait_vblank();
     *V68_IRQ_ENABLE = V68_IRQ_VBLANK;
 
-    v68_hblank_on(250, 2);
+    v68_hblank_enable(250, 2);
     v68_wait_vblank();
 
     v68_puts("ok\n");

@@ -1,4 +1,4 @@
-#include "vega68_sound.h"
+#include "vega68_sfx.h"
 
 static const V68Patch ping = {
     .op = { { 0x01, 0, 0x1F, 0, 0, 0x05, 0 },
@@ -28,7 +28,7 @@ static const V68Song song = { .sections = body, .section_count = 1, .loop_sectio
 
 void main(void) {
     v68_irq_init();
-    v68_vblank_on();
+    v68_vblank_enable();
 
     if (v68_song_start(&song) != 0) {
         *V68_DEBUG_PUTC = 0x04;

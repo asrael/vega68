@@ -1,4 +1,4 @@
-#include "vega68_sound.h"
+#include "vega68_sfx.h"
 
 static void putdec(u32 v) {
     if (v >= 10)
@@ -15,7 +15,7 @@ static void puthex(u8 v) {
 
 void main(void) {
     v68_irq_init();
-    v68_vblank_on();
+    v68_vblank_enable();
 
     for (u8 i = 0; i < 12; i++) {
         const V68Patch *p = &v68_patches[i];

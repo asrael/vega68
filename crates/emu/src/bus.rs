@@ -1,6 +1,7 @@
 use m68k::{AddressBus, FastMem};
 
 use crate::apu::Apu;
+use crate::tpu::{self, Tpu};
 
 pub const BIOS_SIZE: u32 = 0x0010_0000; // 1 MiB window
 pub const CART_BASE: u32 = 0x0100_0000;
@@ -13,7 +14,9 @@ pub const VRAM_BASE: u32 = 0x0300_0000;
 pub const VRAM_SIZE: u32 = 0x0008_0000; // 512 KiB
 pub const PALETTE_BASE: u32 = 0x0308_0000;
 pub const PALETTE_SIZE: u32 = 0x0000_0400; // 256 entries x 4 B
-pub const MEM_END: u32 = PALETTE_BASE + PALETTE_SIZE;
+pub const TPU_RAM_BASE: u32 = 0x0400_0000;
+pub const TPU_RAM_SIZE: u32 = 0x0040_0000; // 4 MiB
+pub const MEM_END: u32 = TPU_RAM_BASE + TPU_RAM_SIZE;
 pub const MMIO_BASE: u32 = 0xFF00_0000;
 pub const AUDIO_BASE: u32 = 0xFF00_0400;
 pub const AUDIO_END: u32 = 0xFF00_0900;
@@ -25,10 +28,23 @@ pub const IRQ_ACK: u32 = 0xFF00_0008;
 pub const LINE_COMPARE: u32 = 0xFF00_000C;
 pub const BRIGHTNESS: u32 = 0xFF00_0010;
 pub const LINE_INTERVAL: u32 = 0xFF00_0014;
+pub const MOUSE_X: u32 = 0xFF00_0108;
+pub const MOUSE_Y: u32 = 0xFF00_010C;
 pub const PAD_1: u32 = 0xFF00_0100;
 pub const PAD_2: u32 = 0xFF00_0104;
 pub const DEBUG_PUTC: u32 = 0xFF00_0200;
 pub const RESET_REASON: u32 = 0xFF00_0300;
+pub const TPU_TAIL: u32 = 0xFF00_0A00;
+pub const TPU_STATUS: u32 = 0xFF00_0A04;
+pub const TPU_HEAD: u32 = 0xFF00_0A08;
+pub const TPU_PIXELS_LO: u32 = 0xFF00_0A0C;
+pub const TPU_PIXELS_HI: u32 = 0xFF00_0A10;
+
+pub const TPU_BUSY: u16 = 0x8000; // TPU_STATUS bit 15: head != tail
+
+// Plain VRAM, not MMIO -- read/written through the flat mem window.
+pub const VDP_MODE: u32 = VRAM_BASE + 0x6_1800;
+pub const FB_BASE: u32 = VRAM_BASE + 0x6_1804;
 
 pub const PAD_UP: u16 = 0x0001;
 pub const PAD_DOWN: u16 = 0x0002;
@@ -62,8 +78,10 @@ pub struct Bus {
     pub line_compare: u16,
     pub line_interval: u16,
     pub mem: Vec<u8>,
+    pub mouse: [i16; 2],
     pub pads: [u16; 2],
     pub reset_reason: u16,
+    pub tpu: Tpu,
 }
 
 impl Bus {
@@ -83,8 +101,10 @@ impl Bus {
             line_compare: 0,
             line_interval: 0,
             mem,
+            mouse: [0; 2],
             pads: [0; 2],
             reset_reason: 0,
+            tpu: Tpu::new(),
         }
     }
 
@@ -96,9 +116,21 @@ impl Bus {
             LINE_COMPARE => self.line_compare,
             BRIGHTNESS => self.brightness as u16,
             LINE_INTERVAL => self.line_interval,
+            MOUSE_X => self.mouse[0] as u16,
+            MOUSE_Y => self.mouse[1] as u16,
             PAD_1 => self.pads[0],
             PAD_2 => self.pads[1],
             RESET_REASON => self.reset_reason,
+            TPU_STATUS => {
+                if self.tpu.head != self.tpu.tail {
+                    TPU_BUSY
+                } else {
+                    0
+                }
+            }
+            TPU_HEAD => self.tpu.head,
+            TPU_PIXELS_LO => self.tpu.pixels as u16,
+            TPU_PIXELS_HI => (self.tpu.pixels >> 16) as u16,
             _ => 0,
         }
     }
@@ -160,6 +192,10 @@ impl Bus {
                     }
                 }
                 RESET_REASON => self.reset_reason = value as u16,
+                TPU_TAIL => {
+                    self.tpu.tail = value as u16;
+                    tpu::run(&mut self.tpu, &mut self.mem);
+                }
                 _ => {}
             }
 
@@ -309,6 +345,17 @@ mod tests {
         assert_eq!(b.debug_out.len(), DEBUG_OUT_CAP);
     }
 
+
+    #[test]
+    fn mouse_deltas_read_back_signed() {
+        let mut b = bus();
+
+        b.mouse = [-3, 7];
+
+        assert_eq!(b.read_word(MOUSE_X), 0xFFFD);
+        assert_eq!(b.read_word(MOUSE_Y), 7);
+    }
+
     #[test]
     fn irq_ack_clears_pending() {
         let mut b = bus();
@@ -344,5 +391,32 @@ mod tests {
             0x71,
             "the straddled byte never reached the APU"
         );
+    }
+
+    #[test]
+    fn tpu_ram_is_dumb_bytes_inside_the_flat_block() {
+        let mut b = bus();
+        b.write_long(0x0400_0000, 0xDEAD_BEEF);
+        assert_eq!(b.read_long(0x0400_0000), 0xDEAD_BEEF);
+        assert_eq!(b.mem.len(), 0x0440_0000);
+    }
+
+    #[test]
+    fn tpu_mmio_reads_back_head_tail_and_pixels() {
+        let mut b = bus();
+        b.tpu.head = 0x1234;
+        b.tpu.tail = 0x1234; // drained: head caught up, must read idle
+        b.tpu.pixels = 0x0005_0001;
+        assert_eq!(b.read_word(TPU_HEAD), 0x1234);
+        assert_eq!(b.read_word(TPU_PIXELS_LO), 0x0001);
+        assert_eq!(b.read_word(TPU_PIXELS_HI), 0x0005);
+        assert_eq!(b.read_word(TPU_STATUS) & 0x8000, 0, "idle must not read busy");
+    }
+
+    #[test]
+    fn tail_write_advances_head_to_tail() {
+        let mut b = bus();
+        b.write_word(TPU_TAIL, 40);
+        assert_eq!(b.tpu.head, 40, "stub run() must drain to tail");
     }
 }

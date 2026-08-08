@@ -6,7 +6,7 @@ void v68_vblank_hook(void) {
 
 void main(void) {
     v68_irq_init();
-    v68_vblank_on();
+    v68_vblank_enable();
     v68_puts("pre\n");
 
     __asm__ volatile(".word 0x4afc"); // ILLEGAL: vector 4

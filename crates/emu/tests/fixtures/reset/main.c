@@ -12,7 +12,7 @@ void main(void) {
 
     if (n < 2) {
         v68_irq_init();
-        v68_vblank_on();
+        v68_vblank_enable();
         V68_VEC_LINE = (u32)on_line;
 
         v68_reset();

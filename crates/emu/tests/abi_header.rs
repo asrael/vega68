@@ -1,3 +1,4 @@
+use vega68::tpu::{self, Tpu};
 use vega68::{bus, vdp};
 
 use std::collections::BTreeMap;
@@ -26,6 +27,28 @@ fn header_const(header: &str, name: &str) -> u32 {
         .product()
 }
 
+/// A `const NAME: <ty> = <literal>;` row in a Rust source, for pinning header
+/// constants against emulator internals that have no `pub` surface.
+fn rust_const(src: &str, name: &str) -> u32 {
+    let line = src
+        .lines()
+        .find(|l| l.starts_with(&format!("const {name}:")))
+        .unwrap_or_else(|| panic!("missing const {name}"));
+
+    let value = line
+        .split_once('=')
+        .unwrap()
+        .1
+        .trim()
+        .trim_end_matches(';')
+        .trim();
+
+    match value.strip_prefix("0x") {
+        Some(hex) => u32::from_str_radix(&hex.replace('_', ""), 16).unwrap(),
+        None => value.parse().unwrap(),
+    }
+}
+
 fn repo_file(name: &str) -> String {
     let path = Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../..")
@@ -41,16 +64,20 @@ fn header_matches_emulator_abi() {
     #[rustfmt::skip]
     let defines: Vec<(&str, String)> = vec![
         ("V68_VRAM", format!("{:#010X}", bus::VRAM_BASE)),
-        ("V68_TILEMAP(n)", format!("{:#010X}", bus::VRAM_BASE + 0x4_0000)),
+        ("V68_TILES", format!("{:#010X}", bus::VRAM_BASE)),
+        ("V68_TILEMAPS", format!("{:#010X}", bus::VRAM_BASE + 0x4_0000)),
         ("V68_SPRITES", format!("{:#010X}", bus::VRAM_BASE + 0x6_0000)),
         ("V68_SCROLL", format!("{:#010X}", bus::VRAM_BASE + 0x6_1000)),
+        ("V68_VDP_MODE", format!("{:#010X}", bus::VDP_MODE)),
+        ("V68_FB_BASE", format!("{:#010X}", bus::FB_BASE)),
         ("V68_PALETTE", format!("{:#010X}", bus::PALETTE_BASE)),
+        ("V68_TPU_RAM", format!("{:#010X}", bus::TPU_RAM_BASE)),
     ];
 
     for (name, value) in defines {
         let line = header
             .lines()
-            .find(|l| l.starts_with(&format!("#define {name}")))
+            .find(|l| l.starts_with("#define") && l.split_whitespace().nth(1) == Some(name))
             .unwrap_or_else(|| panic!("vega68_hw.h: missing #define {name}"));
 
         assert!(
@@ -182,6 +209,7 @@ fn header_sizes_match_emulator_abi() {
 
     let sizes: Vec<(&str, u32)> = vec![
         ("V68_VRAM_SIZE", bus::VRAM_SIZE),
+        ("V68_TPU_RAM_SIZE", bus::TPU_RAM_SIZE),
         ("V68_PALETTE_SIZE", bus::PALETTE_SIZE / 4),
         ("V68_BRIGHTNESS_LEVELS", u8::MAX as u32 + 1),
         ("V68_TILEMAP_COLS", vdp::TILEMAP_COLS as u32),
@@ -191,10 +219,10 @@ fn header_sizes_match_emulator_abi() {
             (vdp::TILEMAP_COLS * vdp::TILEMAP_ROWS) as u32,
         ),
         ("V68_TILEMAP_PLANES", vdp::TILEMAP_PLANES as u32),
-        ("V68_TILEMAP_STRIDE", vdp::TILEMAP_STRIDE as u32),
         ("V68_SPRITE_COUNT", vdp::SPRITE_COUNT as u32),
-        ("V68_SPRITE_WORDS", (vdp::SPRITE_STRIDE / 2) as u32),
     ];
+
+    assert_eq!(vdp::SPRITE_STRIDE, 8);
 
     for (name, value) in sizes {
         assert_eq!(
@@ -203,6 +231,129 @@ fn header_sizes_match_emulator_abi() {
             "vega68_hw.h: {name} disagrees with emulator"
         );
     }
+}
+
+#[test]
+fn tpu_command_encoding_matches_emulator_abi() {
+    let header = repo_file("devkit/vega68_hw.h");
+    let tpu_src = repo_file("crates/emu/src/tpu.rs");
+
+    let pins: Vec<(&str, &str)> = vec![
+        ("V68_TPU_OP_TRI", "OP_TRI"),
+        ("V68_TPU_OP_FILL", "OP_FILL"),
+        ("V68_TPU_TRI_WORDS", "TRI_WORDS"),
+        ("V68_TPU_FILL_WORDS", "FILL_WORDS"),
+        ("V68_TRI_BLEND", "TRI_BLEND"),
+        ("V68_TRI_ZGREATER", "TRI_ZGREATER"),
+        ("V68_TRI_ZTEST_OFF", "TRI_ZTEST_OFF"),
+        ("V68_TRI_ZWRITE_OFF", "TRI_ZWRITE_OFF"),
+        ("V68_FILL_COLOR", "FILL_COLOR"),
+        ("V68_FILL_Z", "FILL_Z"),
+    ];
+
+    for (define, name) in pins {
+        assert_eq!(
+            header_const(&header, define),
+            rust_const(&tpu_src, name),
+            "vega68_hw.h: {define} disagrees with tpu.rs's {name}"
+        );
+    }
+
+    assert_eq!(
+        header_const(&header, "V68_TPU_BUSY"),
+        bus::TPU_BUSY as u32,
+        "vega68_hw.h: V68_TPU_BUSY disagrees with bus::TPU_BUSY"
+    );
+}
+
+/// The state-block field offsets are positional reads in `read_state_block`,
+/// with no Rust consts to diff against. The ABI is the offset table in
+/// registers.md Rev 4 (0/4/8/12/16/18), expressed C-side as the V68TpuState
+/// struct in vega68_hw.h; this drives a real FILL through a block laid out
+/// at those literal offsets, so a drifted emulator read leaves a bad ring or
+/// a zero-width target and nothing gets painted.
+#[test]
+fn tpu_state_block_offsets_match_emulator_abi() {
+    const COLOR: u32 = 0x1000;
+    const RING: u32 = 0x100;
+    const Z: u32 = 0x2000;
+    // Non-square so a WIDTH/HEIGHT define transposition changes the row
+    // stride and moves where the FILL below lands, instead of being masked
+    // by width == height.
+    const WIDTH: u32 = 16;
+    const HEIGHT: u32 = 8;
+
+    let base = bus::TPU_RAM_BASE as usize;
+    let mut mem = vec![0u8; bus::MEM_END as usize];
+
+    let mut put = |at: u32, bytes: &[u8]| {
+        mem[base + at as usize..][..bytes.len()].copy_from_slice(bytes);
+    };
+
+    put(0, &RING.to_be_bytes());
+    put(4, &8u32.to_be_bytes());
+    put(8, &COLOR.to_be_bytes());
+    put(12, &Z.to_be_bytes());
+    put(16, &(WIDTH as u16).to_be_bytes());
+    put(18, &(HEIGHT as u16).to_be_bytes());
+
+    // FILL (1,1)-(3,3), color 7, z 0xBEEF -- an off-by-one in the width
+    // offset would also move the pixel this lands on.
+    for (i, w) in [0x0200_0003u32, 0x0001_0001, 0x0003_0003, 7, 0xBEEF]
+        .into_iter()
+        .enumerate()
+    {
+        put(RING + i as u32 * 4, &w.to_be_bytes());
+    }
+
+    let mut t = Tpu::new();
+    t.tail = 5;
+    tpu::run(&mut t, &mut mem);
+
+    let at = (WIDTH + 1) as usize;
+
+    assert_eq!(
+        mem[base + COLOR as usize + at],
+        7,
+        "the FILL never reached the colour target the header's offsets describe"
+    );
+    assert_eq!(
+        mem[base + Z as usize + at * 2..][..2],
+        [0xBE, 0xEF],
+        "the FILL never reached the z target the header's offsets describe"
+    );
+}
+
+#[test]
+fn vdp_mode_bits_match_emulator_abi() {
+    let header = repo_file("devkit/vega68_hw.h");
+    let hires = header_const(&header, "V68_MODE_HIRES") as u16;
+    let tpu_plane = header_const(&header, "V68_MODE_TPU_PLANE") as u16;
+    let mut mem = vec![0u8; bus::MEM_END as usize];
+
+    mem[bus::PALETTE_BASE as usize + 4..][..4].copy_from_slice(&0x00AB_CDEFu32.to_be_bytes());
+    mem[bus::TPU_RAM_BASE as usize] = 1; // fb_base is 0: framebuffer pixel (0,0)
+
+    mem[bus::VDP_MODE as usize..][..2].copy_from_slice(&hires.to_be_bytes());
+    assert_eq!(
+        vdp::mode(&mem),
+        (vdp::WIDTH * 2, vdp::HEIGHT * 2),
+        "V68_MODE_HIRES is not the bit that doubles the output resolution"
+    );
+
+    mem[bus::VDP_MODE as usize..][..2].copy_from_slice(&tpu_plane.to_be_bytes());
+    let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
+    vdp::render(&mem, 255, &mut out);
+
+    assert_eq!(
+        vdp::mode(&mem),
+        (vdp::WIDTH, vdp::HEIGHT),
+        "V68_MODE_TPU_PLANE must not change the output resolution"
+    );
+    assert_eq!(
+        out[0], 0x00AB_CDEF,
+        "V68_MODE_TPU_PLANE is not the bit that paints the framebuffer plane"
+    );
 }
 
 #[test]

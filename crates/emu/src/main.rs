@@ -13,6 +13,7 @@
 use vega68::System;
 use vega68::apu::out::AudioOut;
 use vega68::bus;
+use vega68::vdp;
 use vega68::vdp::{HEIGHT, WIDTH};
 
 use std::num::NonZeroU32;
@@ -23,13 +24,14 @@ use gilrs::{Axis, Button, EventType, Gilrs};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{ElementState, WindowEvent};
+use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
-use winit::window::{Window, WindowId};
+use winit::window::{CursorGrabMode, Window, WindowId};
 
 const BIOS: &[u8] = include_bytes!("../../../bios/vega68.rom");
 const FRAME: Duration = Duration::from_nanos(16_666_667);
+const STICK_LOOK: f64 = 8.0; // full right-stick deflection, look pixels per frame
 
 /// 6x = 1920x1080.
 const MAX_SCALE: usize = 6;
@@ -126,6 +128,12 @@ fn run_headless(mut sys: System, frames: u64, mut watch: Option<Watch>) {
         }
 
         sys.run_frame();
+
+        let (w, h) = vdp::mode(&sys.bus.mem);
+        if frame.len() != w * h {
+            frame = vec![0u32; w * h];
+        }
+
         sys.render(&mut frame);
         println!("frame {i} {:016x}", fnv1a64(&frame));
     }
@@ -181,12 +189,16 @@ fn main() {
 
 struct Vega68 {
     audio: Option<AudioOut>,
+    captured: bool,
+    dims: (usize, usize),
     frame: Vec<u32>,
     gamepad: u16,
     gilrs: Option<Gilrs>,
     initial_scale: Option<usize>,
+    look: (f64, f64),
     next_frame: Instant,
     pad: u16,
+    rstick: (f64, f64),
     stick: u16,
     surface: Option<Surface<Rc<Window>, Rc<Window>>>,
     sys: System,
@@ -194,10 +206,26 @@ struct Vega68 {
     window: Option<Rc<Window>>,
 }
 
+// Thin, master-space-fixed aliases kept for the existing test table below;
+// the live render path always goes through the mode-aware `_for` versions.
+#[cfg(test)]
 fn blit(frame: &[u32], out: &mut [u32], surface_w: usize, surface_h: usize) {
-    let (scale, ox, oy) = fit(surface_w, surface_h);
-    let img_w = (WIDTH * scale).min(surface_w - ox);
-    let img_h = (HEIGHT * scale).min(surface_h - oy);
+    blit_for(frame, out, WIDTH, HEIGHT, surface_w, surface_h);
+}
+
+// `blit` fixed to master-space (320x180); `blit_for` takes the current
+// mode's dims so hi-res (640x360) letterboxes the same way.
+fn blit_for(
+    frame: &[u32],
+    out: &mut [u32],
+    w: usize,
+    h: usize,
+    surface_w: usize,
+    surface_h: usize,
+) {
+    let (scale, ox, oy) = fit_for(w, h, surface_w, surface_h);
+    let img_w = (w * scale).min(surface_w - ox);
+    let img_h = (h * scale).min(surface_h - oy);
 
     out[..oy * surface_w].fill(0);
     out[(oy + img_h) * surface_w..].fill(0);
@@ -208,7 +236,7 @@ fn blit(frame: &[u32], out: &mut [u32], surface_w: usize, surface_h: usize) {
         row[..ox].fill(0);
         row[ox + img_w..].fill(0);
 
-        let src = &frame[(y / scale) * WIDTH..][..WIDTH];
+        let src = &frame[(y / scale) * w..][..w];
         let dst = &mut row[ox..][..img_w];
         let n_full = img_w / scale;
         let (chunked, tail) = dst.split_at_mut(n_full * scale);
@@ -223,10 +251,15 @@ fn blit(frame: &[u32], out: &mut [u32], surface_w: usize, surface_h: usize) {
     }
 }
 
+#[cfg(test)]
 fn fit(surface_w: usize, surface_h: usize) -> (usize, usize, usize) {
-    let scale = (surface_w / WIDTH).min(surface_h / HEIGHT).max(1);
-    let ox = surface_w.saturating_sub(WIDTH * scale) / 2;
-    let oy = surface_h.saturating_sub(HEIGHT * scale) / 2;
+    fit_for(WIDTH, HEIGHT, surface_w, surface_h)
+}
+
+fn fit_for(w: usize, h: usize, surface_w: usize, surface_h: usize) -> (usize, usize, usize) {
+    let scale = (surface_w / w).min(surface_h / h).max(1);
+    let ox = surface_w.saturating_sub(w * scale) / 2;
+    let oy = surface_h.saturating_sub(h * scale) / 2;
 
     (scale, ox, oy)
 }
@@ -272,14 +305,18 @@ fn run_windowed(sys: System, scale: Option<usize>, watch: Option<Watch>) {
 
     let mut vega68 = Vega68 {
         audio: AudioOut::new(),
+        captured: false,
+        dims: (WIDTH, HEIGHT),
         frame: vec![0u32; WIDTH * HEIGHT],
         gamepad: 0,
         gilrs: Gilrs::new()
             .inspect_err(|e| eprintln!("gamepads unavailable: {e}"))
             .ok(),
         initial_scale: scale,
+        look: (0.0, 0.0),
         next_frame: Instant::now(),
         pad: 0,
+        rstick: (0.0, 0.0),
         stick: 0,
         surface: None,
         sys,
@@ -295,6 +332,13 @@ impl Vega68 {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
+        let dims = vdp::mode(&self.sys.bus.mem);
+
+        if dims != self.dims {
+            self.dims = dims;
+            self.frame = vec![0u32; dims.0 * dims.1];
+        }
+
         let mut buffer = surface
             .buffer_mut()
             .expect("failed to acquire surface buffer");
@@ -302,9 +346,35 @@ impl Vega68 {
         let h = buffer.height().get() as usize;
 
         self.sys.render(&mut self.frame);
-        blit(&self.frame, &mut buffer, w, h);
+        blit_for(&self.frame, &mut buffer, dims.0, dims.1, w, h);
 
         buffer.present().expect("failed to present frame");
+    }
+
+    fn capture_cursor(&mut self) {
+        let Some(w) = &self.window else { return };
+
+        if self.captured {
+            return;
+        }
+
+        let grabbed = w
+            .set_cursor_grab(CursorGrabMode::Locked)
+            .or_else(|_| w.set_cursor_grab(CursorGrabMode::Confined))
+            .is_ok();
+
+        if grabbed {
+            w.set_cursor_visible(false);
+            self.captured = true;
+        }
+    }
+
+    fn release_cursor(&mut self) {
+        let Some(w) = &self.window else { return };
+
+        let _ = w.set_cursor_grab(CursorGrabMode::None);
+        w.set_cursor_visible(true);
+        self.captured = false;
     }
 
     fn poll_gamepad(&mut self) {
@@ -347,6 +417,16 @@ impl Vega68 {
                     }
                 }
 
+                // right stick is look: it feeds the same delta registers as
+                // the captured mouse, stick-up meaning look-up
+                EventType::AxisChanged(Axis::RightStickX, v, _) => {
+                    self.rstick.0 = if v.abs() > 0.15 { v as f64 } else { 0.0 };
+                }
+
+                EventType::AxisChanged(Axis::RightStickY, v, _) => {
+                    self.rstick.1 = if v.abs() > 0.15 { -v as f64 } else { 0.0 };
+                }
+
                 _ => {}
             }
         }
@@ -363,6 +443,11 @@ impl ApplicationHandler for Vega68 {
             }
             self.poll_gamepad();
             self.sys.bus.pads[0] = self.pad | self.gamepad | self.stick;
+            self.look.0 += self.rstick.0 * STICK_LOOK;
+            self.look.1 += self.rstick.1 * STICK_LOOK;
+            let (dx, dy) = (self.look.0 as i16, self.look.1 as i16);
+            self.look = (self.look.0 - dx as f64, self.look.1 - dy as f64);
+            self.sys.bus.mouse = [dx, dy];
             self.sys.run_frame();
             if let Some(a) = &self.audio {
                 a.push(&self.sys.bus.apu.frame);
@@ -417,13 +502,26 @@ impl ApplicationHandler for Vega68 {
         self.next_frame = Instant::now();
     }
 
+    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
+        if let DeviceEvent::MouseMotion { delta } = event {
+            if self.captured {
+                self.look.0 += delta.0;
+                self.look.1 += delta.1;
+            }
+        }
+    }
+
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.logical_key == Key::Named(NamedKey::Escape) {
-                    event_loop.exit();
+                    if self.captured {
+                        self.release_cursor();
+                    } else {
+                        event_loop.exit();
+                    }
                 } else if let PhysicalKey::Code(code) = event.physical_key {
                     if let Some(bit) = pad_bit(code) {
                         match event.state {
@@ -433,6 +531,12 @@ impl ApplicationHandler for Vega68 {
                     }
                 }
             }
+
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => self.capture_cursor(),
 
             WindowEvent::RedrawRequested => self.draw(),
 

@@ -1,5 +1,5 @@
 #include "vega68_hw.h"
-#include "vega68_sound.h"
+#include "vega68_sfx.h"
 
 #define BG_TILE     5
 #define BRIGHT_STEP 4
@@ -76,13 +76,13 @@ static void load_box(i32 tile) {
                 i32 gy = (t >> 1) * 8 + py;
                 bool edge = gx == 0 || gx == 15 || gy == 0 || gy == 15;
 
-                V68_VRAM[(tile + t) * 64 + py * 8 + px] = edge ? 3 : 2;
+                V68_TILES[tile + t].px[py][px] = edge ? 3 : 2;
             }
 }
 
 static void load_checker(i32 tile) {
     for (i32 i = 0; i < 64; i++)
-        V68_VRAM[tile * 64 + i] = (u8)(((i & 7) / 4 + (i >> 3) / 4) & 1);
+        V68_TILES[tile].px[i >> 3][i & 7] = (u8)(((i & 7) / 4 + (i >> 3) / 4) & 1);
 }
 
 static void setup(void) {
@@ -99,20 +99,20 @@ static void setup(void) {
     load_checker(BG_TILE);
     load_box(SPRITE_TILE);
 
-    volatile u16 *map = V68_TILEMAP(0);
+    volatile u16 *map = &V68_TILEMAPS[0].cell[0][0];
 
     for (i32 i = 0; i < V68_TILEMAP_CELLS; i++)
         map[i] = BG_TILE;
 
-    V68_SPRITES[0] = HOME_X;
-    V68_SPRITES[1] = HOME_Y;
-    V68_SPRITES[2] = 0x8000 | SPRITE_TILE;
-    V68_SPRITES[3] = (1 << 3) | 1;
+    V68_SPRITES[0].x = HOME_X;
+    V68_SPRITES[0].y = HOME_Y;
+    V68_SPRITES[0].ctrl = 0x8000 | SPRITE_TILE;
+    V68_SPRITES[0].attr = (1 << 3) | 1;
 }
 
 void main(void) {
     v68_irq_init();
-    v68_vblank_on();
+    v68_vblank_enable();
     setup();
 
     if (v68_song_start(&fanfare) != 0)
@@ -154,9 +154,9 @@ void main(void) {
         scroll++;
 
         *V68_BRIGHTNESS = bright;
-        V68_SCROLL[0] = (u16)(scroll / 2);
-        V68_SCROLL[1] = (u16)((scroll + 1) / 2);
-        V68_SPRITES[0] = (u16)x;
-        V68_SPRITES[1] = (u16)y;
+        V68_SCROLL->plane[0].h = (u16)(scroll / 2);
+        V68_SCROLL->plane[0].v = (u16)((scroll + 1) / 2);
+        V68_SPRITES[0].x = (i16)x;
+        V68_SPRITES[0].y = (i16)y;
     }
 }

@@ -211,7 +211,7 @@ fn devkit_source_change_forces_a_cart_rebuild() {
 
     let v68 = xtask::build_cart(&cart_dir, &out_dir).unwrap();
 
-    let devkit_sound = root.join("devkit/vega68_sound.c");
+    let devkit_sound = root.join("devkit/vega68_sfx.c");
     let other_devkit: Vec<PathBuf> = gather(&root.join("devkit"), &["c", "h", "ld"])
         .into_iter()
         .filter(|p| *p != devkit_sound)
@@ -244,7 +244,7 @@ fn devkit_source_change_forces_a_cart_rebuild() {
 
     assert_ne!(
         rebuilt, threshold,
-        "build_cart did not rebuild a cart with a newer devkit/vega68_sound.c — \
+        "build_cart did not rebuild a cart with a newer devkit/vega68_sfx.c — \
          the devkit source glob dropped out of build_cart's tracked input set"
     );
 }

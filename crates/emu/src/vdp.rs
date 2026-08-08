@@ -7,12 +7,20 @@
 //!     [12] H flip, [11:0] tile), attr ([15:8] palette offset,
 //!     [5:3] height-1, [2:0] width-1, in tiles)
 //!   palette    PALETTE_BASE          256 x u32 BE 0x00RRGGBB
+//!   mode       VDP_MODE              u16: bit0 HIRES, bit1 TPU_PLANE
+//!   fb_base    FB_BASE               u32: byte offset into TPU RAM
 //!
 //! Color index 0 = transparent -> backdrop = palette[0]. Compositing order:
 //! backdrop, planes 0-3 lo, sprites lo, planes 0-2 hi, sprites hi,
 //! plane 3 hi (the UI slot). Lower sprite index wins overlaps.
+//!
+//! HIRES doubles every master-space (320x180) pixel into a 2x2 block of the
+//! 640x360 output. TPU_PLANE replaces plane 0 (both priorities) with the
+//! framebuffer at `TPU_RAM_BASE + fb_base`, sampled 1:1 at the output
+//! resolution and painted opaque (index 0 included) right after the
+//! backdrop.
 
-use crate::bus::{PALETTE_BASE, VRAM_BASE};
+use crate::bus::{FB_BASE, PALETTE_BASE, TPU_RAM_BASE, VDP_MODE, VRAM_BASE};
 
 pub const WIDTH: usize = 320;
 pub const HEIGHT: usize = 180;
@@ -30,26 +38,46 @@ const SCROLL: usize = VRAM_BASE as usize + 0x6_1000;
 const SCROLL_LINE_H: usize = SCROLL + 0x10;
 const SCROLL_COL_V: usize = SCROLL + 0x5B0;
 
+pub fn mode(mem: &[u8]) -> (usize, usize) {
+    if be16(mem, VDP_MODE as usize) & 1 != 0 {
+        (WIDTH * 2, HEIGHT * 2)
+    } else {
+        (WIDTH, HEIGHT)
+    }
+}
+
 pub fn render(mem: &[u8], brightness: u8, out: &mut [u32]) {
-    assert!(out.len() >= WIDTH * HEIGHT);
+    let (w, h) = mode(mem);
+    let zoom = w / WIDTH;
+    let tpu_plane = be16(mem, VDP_MODE as usize) & 2 != 0;
 
-    out[..WIDTH * HEIGHT].fill(palette(mem, 0));
+    assert!(out.len() >= w * h);
 
-    for n in 0..TILEMAP_PLANES {
-        paint_plane(mem, n, false, out);
+    out[..w * h].fill(palette(mem, 0));
+
+    if tpu_plane {
+        paint_framebuffer(mem, w, h, out);
     }
 
-    paint_sprites(mem, false, out);
+    // TPU_PLANE owns the plane-0 slot entirely: it is skipped at both
+    // priorities, not just suppressed where the framebuffer is opaque.
+    let plane_start = if tpu_plane { 1 } else { 0 };
 
-    for n in 0..TILEMAP_PLANES - 1 {
-        paint_plane(mem, n, true, out);
+    for n in plane_start..TILEMAP_PLANES {
+        paint_plane(mem, n, false, zoom, out);
     }
 
-    paint_sprites(mem, true, out);
-    paint_plane(mem, TILEMAP_PLANES - 1, true, out);
+    paint_sprites(mem, false, zoom, out);
+
+    for n in plane_start..TILEMAP_PLANES - 1 {
+        paint_plane(mem, n, true, zoom, out);
+    }
+
+    paint_sprites(mem, true, zoom, out);
+    paint_plane(mem, TILEMAP_PLANES - 1, true, zoom, out);
 
     if brightness != 255 {
-        for px in &mut out[..WIDTH * HEIGHT] {
+        for px in &mut out[..w * h] {
             *px = scale(*px, brightness);
         }
     }
@@ -59,10 +87,14 @@ fn be16(mem: &[u8], a: usize) -> u16 {
     u16::from_be_bytes([mem[a], mem[a + 1]])
 }
 
-fn paint_plane(mem: &[u8], n: usize, hi: bool, out: &mut [u32]) {
+// Master-space painting is untouched by hi-res: every helper still iterates
+// the 320x180 grid (scroll tables, sprite clipping) and `zoom` only decides
+// how many output pixels a single master pixel becomes.
+fn paint_plane(mem: &[u8], n: usize, hi: bool, zoom: usize, out: &mut [u32]) {
     let map = TILEMAPS + n * TILEMAP_STRIDE;
     let plane_h = be16(mem, SCROLL + n * 4);
     let plane_v = be16(mem, SCROLL + n * 4 + 2);
+    let ow = WIDTH * zoom;
 
     for y in 0..HEIGHT {
         let h = plane_h.wrapping_add(be16(mem, SCROLL_LINE_H + n * 360 + y * 2)) as usize;
@@ -89,13 +121,15 @@ fn paint_plane(mem: &[u8], n: usize, hi: bool, out: &mut [u32]) {
             let index = tile_pixel(mem, (entry & 0x0FFF) as usize, tx, ty);
 
             if index != 0 {
-                out[y * WIDTH + x] = palette(mem, index);
+                write_block(out, ow, x * zoom, y * zoom, zoom, palette(mem, index));
             }
         }
     }
 }
 
-fn paint_sprites(mem: &[u8], hi: bool, out: &mut [u32]) {
+fn paint_sprites(mem: &[u8], hi: bool, zoom: usize, out: &mut [u32]) {
+    let ow = WIDTH * zoom;
+
     for s in (0..SPRITE_COUNT).rev() {
         let e = SPRITES + s * SPRITE_STRIDE;
         let ctrl = be16(mem, e + 4);
@@ -139,10 +173,41 @@ fn paint_sprites(mem: &[u8], hi: bool, out: &mut [u32]) {
                     } else {
                         (index + offset) & 0xFF
                     };
-                    out[py as usize * WIDTH + px as usize] = palette(mem, index);
+                    let (px, py) = (px as usize * zoom, py as usize * zoom);
+
+                    write_block(out, ow, px, py, zoom, palette(mem, index));
                 }
             }
         }
+    }
+}
+
+// TPU_PLANE's plane-0 slot: native resolution, opaque (index 0 included),
+// sampled 1:1 from TPU RAM -- no master-space indexing, unlike every other
+// layer.
+fn paint_framebuffer(mem: &[u8], w: usize, h: usize, out: &mut [u32]) {
+    let fb_base = u32::from_be_bytes([
+        mem[FB_BASE as usize],
+        mem[FB_BASE as usize + 1],
+        mem[FB_BASE as usize + 2],
+        mem[FB_BASE as usize + 3],
+    ]) as usize;
+    let base = TPU_RAM_BASE as usize + fb_base;
+
+    for y in 0..h {
+        for x in 0..w {
+            let index = mem.get(base + y * w + x).copied().unwrap_or(0) as usize;
+
+            out[y * w + x] = palette(mem, index);
+        }
+    }
+}
+
+fn write_block(out: &mut [u32], stride: usize, x: usize, y: usize, zoom: usize, color: u32) {
+    for dy in 0..zoom {
+        let row = (y + dy) * stride;
+
+        out[row + x..row + x + zoom].fill(color);
     }
 }
 
@@ -190,6 +255,14 @@ mod tests {
     fn set_entry(mem: &mut [u8], col: usize, row: usize, entry: u16) {
         mem[TILEMAP_0 + (row * TILEMAP_COLS + col) * 2..][..2]
             .copy_from_slice(&entry.to_be_bytes());
+    }
+
+    fn set_fb_base(mem: &mut [u8], off: u32) {
+        mem[FB_BASE as usize..][..4].copy_from_slice(&off.to_be_bytes());
+    }
+
+    fn set_mode(mem: &mut [u8], bits: u16) {
+        mem[VDP_MODE as usize..][..2].copy_from_slice(&bits.to_be_bytes());
     }
 
     fn set_palette(mem: &mut [u8], i: usize, rgb: u32) {
@@ -367,5 +440,97 @@ mod tests {
         let f = frame(&m);
 
         assert_eq!(f[0], 0x0011_1111); // sprite 0 in front of sprite 1
+    }
+
+    #[test]
+    fn lores_render_is_bit_identical_with_mode_zero() {
+        // golden-guard: the `sprite_priority_and_ui_slot` fixture (planes
+        // hi/lo, sprites hi/lo, the plane-3 UI slot), rendered through the
+        // mode-aware entry point with the mode word explicitly zero -- must
+        // composite pixel for pixel exactly as the pre-hires machine did.
+        let mut m = vec![0u8; MEM_END as usize];
+        set_palette(&mut m, 1, 0x0011_1111);
+        set_palette(&mut m, 2, 0x0022_2222);
+        set_palette(&mut m, 3, 0x0033_3333);
+        checker_tile(&mut m);
+        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2); // tile 2: solid index 2
+        m[VRAM_BASE as usize + 192..VRAM_BASE as usize + 256].fill(3); // tile 3: solid index 3
+        set_entry(&mut m, 0, 0, 0x4002); // plane 0 hi: solid tile 2
+        set_sprite(&mut m, 0, 0, 0, 0x8001, 0); // lo sprite: under hi plane
+        set_sprite(&mut m, 1, 4, 0, 0xC001, 0); // hi sprite: over hi plane
+        let map3 = TILEMAPS + 3 * 0x8000;
+        m[map3 + 2..map3 + 4].copy_from_slice(&0x4003u16.to_be_bytes()); // plane 3 hi cell (1,0)
+        set_mode(&mut m, 0);
+
+        assert_eq!(mode(&m), (WIDTH, HEIGHT));
+
+        let mut out = vec![0u32; WIDTH * HEIGHT];
+        render(&m, 255, &mut out);
+
+        assert_eq!(out[0], 0x0022_2222); // hi plane covers lo sprite
+        assert_eq!(out[4], 0x0011_1111); // hi sprite covers hi plane
+        assert_eq!(out[8], 0x0033_3333); // plane 3 hi (UI) covers hi sprite
+    }
+
+    #[test]
+    fn hires_doubles_tiles_and_samples_the_fb_native() {
+        let mut m = vec![0u8; MEM_END as usize];
+        set_palette(&mut m, 0, 0x0010_2030); // backdrop
+        set_palette(&mut m, 1, 0x00AA_BBCC); // tile pixel
+        set_palette(&mut m, 4, 0x0033_4455); // fb pixel
+
+        // plane 1 (plane 0 is suppressed by TPU_PLANE): a single tile pixel
+        // at local tile coords (3,2) of tile 1, cell (0,0) -> master (3,2).
+        m[VRAM_BASE as usize + 64 + 2 * 8 + 3] = 1;
+        let plane1_map = TILEMAPS + TILEMAP_STRIDE;
+        m[plane1_map..plane1_map + 2].copy_from_slice(&1u16.to_be_bytes());
+
+        set_fb_base(&mut m, 0);
+        m[TPU_RAM_BASE as usize + 640 + 5] = 4; // fb index 4 at native (5,1)
+
+        set_mode(&mut m, 0b11); // HIRES | TPU_PLANE
+
+        assert_eq!(mode(&m), (WIDTH * 2, HEIGHT * 2));
+
+        let mut out = vec![0u32; WIDTH * 2 * HEIGHT * 2];
+        render(&m, 255, &mut out);
+
+        let w = WIDTH * 2;
+        let tile_color = 0x00AA_BBCC;
+
+        for (x, y) in [(6, 4), (7, 4), (6, 5), (7, 5)] {
+            assert_eq!(out[y * w + x], tile_color, "doubled block ({x},{y})");
+        }
+
+        assert_eq!(out[w + 5], 0x0033_4455, "fb sampled 1:1 at native (5,1)");
+        assert_eq!(out[0], 0x0010_2030, "fb index 0 paints palette[0], opaque");
+    }
+
+    #[test]
+    fn tpu_plane_suppresses_plane_zero_both_priorities() {
+        let mut m = vec![0u8; MEM_END as usize];
+        set_palette(&mut m, 0, 0x0010_2030);
+        set_palette(&mut m, 1, 0x00AA_BBCC);
+        set_palette(&mut m, 2, 0x0033_4455);
+        checker_tile(&mut m);
+        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2); // tile 2: solid index 2
+
+        set_entry(&mut m, 0, 0, 1); // plane 0 lo: checker tile
+        set_entry(&mut m, 5, 5, 0x4002); // plane 0 hi: solid tile 2
+
+        set_mode(&mut m, 0b10); // TPU_PLANE only
+
+        assert_eq!(mode(&m), (WIDTH, HEIGHT));
+
+        let mut out = vec![0u32; WIDTH * HEIGHT];
+        render(&m, 255, &mut out);
+
+        let backdrop = 0x0010_2030;
+        assert_eq!(out[0], backdrop, "plane 0 lo must not paint while TPU_PLANE is set");
+        assert_eq!(
+            out[40 * WIDTH + 40],
+            backdrop,
+            "plane 0 hi must not paint while TPU_PLANE is set"
+        );
     }
 }

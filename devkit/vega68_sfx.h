@@ -1,5 +1,5 @@
-#ifndef V68_SOUND_H
-#define V68_SOUND_H
+#ifndef V68_SFX_H
+#define V68_SFX_H
 
 #include "vega68_hw.h"
 

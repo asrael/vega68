@@ -75,12 +75,18 @@ pub fn build_dir(rel: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 }
 
 pub fn fnv1a64(frame: &[i16]) -> u64 {
+    hash(frame.iter().flat_map(|s| s.to_le_bytes()))
+}
+
+pub fn fnv1a64_pixels(frame: &[u32]) -> u64 {
+    hash(frame.iter().flat_map(|p| p.to_le_bytes()))
+}
+
+fn hash(bytes: impl IntoIterator<Item = u8>) -> u64 {
     let mut h = 0xcbf2_9ce4_8422_2325u64;
 
-    for s in frame {
-        for b in s.to_le_bytes() {
-            h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        }
+    for b in bytes {
+        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
     }
 
     h

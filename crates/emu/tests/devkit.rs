@@ -1,8 +1,8 @@
 mod common;
 
-use common::{assert_cart, build, fnv1a64, run_until};
-use vega68::System;
+use common::{assert_cart, build, fnv1a64, fnv1a64_pixels, run_until};
 use vega68::bus::VRAM_BASE;
+use vega68::{System, vdp};
 
 #[test]
 fn audio_devkit_keys_a_patch_and_the_mix_matches_the_golden() {
@@ -16,7 +16,7 @@ fn audio_devkit_keys_a_patch_and_the_mix_matches_the_golden() {
         sys.bus.apu.frame.iter().any(|&s| s != 0),
         "fixture produced silence"
     );
-    // devkit/vega68_sound.c links into every cart (including this one, which never
+    // devkit/vega68_sfx.c links into every cart (including this one, which never
     // calls it) — its static pool is part of this cart's BSS. If this golden moves
     // after resizing that pool, that's the layout shift to check first, not a mix bug.
     assert_eq!(
@@ -116,6 +116,40 @@ fn sound_patches_devkit_keys_all_twelve_presets_audible_and_distinct() {
             );
         }
     }
+}
+
+#[test]
+fn tpu_devkit_rasterises_two_triangles_and_the_frame_matches_the_golden() {
+    // The hex word is the fragment counter read after the tail register drained,
+    // before the next frame start zeroes it: 14,400 for the quarter-cost
+    // full-target FILL, 9,500 covered fragments for the textured triangle
+    // (exactly its area) and 7,810 for the blended one (area 7,800).
+    let Some(sys) = assert_cart("tpu", "00007bde\nok\n") else {
+        return;
+    };
+
+    assert_eq!(
+        vdp::mode(&sys.bus.mem),
+        (vdp::WIDTH, vdp::HEIGHT),
+        "fixture must display through lo-res + TPU_PLANE"
+    );
+
+    let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
+    sys.render(&mut out);
+
+    // Covers the composited 320x180 output, which under TPU_PLANE is the
+    // colour target mapped through the cart's palette and nothing else. The
+    // fixture's tables put every feature in its own index band, so a drift
+    // localises: 1 is the FILL background (41,386 px), 16..=26 the textured
+    // triangle's level-0 texels shifted by its dithered colormap shades
+    // (8,404 px visible), 138..=145 the blended triangle's level-1 texels
+    // through the blend table (7,810 px, of which 1,096 land over the
+    // textured one, which is also the z-test's only observable seam).
+    assert_eq!(
+        fnv1a64_pixels(&out),
+        0x8aaa_8af3_619e_c60a,
+        "rendered frame drifted from the golden"
+    );
 }
 
 #[test]
