@@ -31,7 +31,8 @@ use winit::window::{CursorGrabMode, Window, WindowId};
 
 const BIOS: &[u8] = include_bytes!("../../../bios/vega68.rom");
 const FRAME: Duration = Duration::from_nanos(16_666_667);
-const STICK_LOOK: f64 = 8.0; // full right-stick deflection, look pixels per frame
+const STICK_LOOK: f64 = 24.0;
+const LOOK_SMOOTH: f64 = 0.5;
 
 /// 6x = 1920x1080.
 const MAX_SCALE: usize = 6;
@@ -445,7 +446,11 @@ impl ApplicationHandler for Vega68 {
             self.sys.bus.pads[0] = self.pad | self.gamepad | self.stick;
             self.look.0 += self.rstick.0 * STICK_LOOK;
             self.look.1 += self.rstick.1 * STICK_LOOK;
-            let (dx, dy) = (self.look.0 as i16, self.look.1 as i16);
+            // release a fraction per frame: smoothing that never drops counts
+            let (dx, dy) = (
+                (self.look.0 * LOOK_SMOOTH) as i16,
+                (self.look.1 * LOOK_SMOOTH) as i16,
+            );
             self.look = (self.look.0 - dx as f64, self.look.1 - dy as f64);
             self.sys.bus.mouse = [dx, dy];
             self.sys.run_frame();

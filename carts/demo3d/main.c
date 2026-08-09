@@ -19,9 +19,9 @@
 #define TEXH   (ROOM_Y / 4)
 #define NEAR      (16 << 16)
 #define FOCAL     320
-#define SPEED     (3 << 16)
-#define LOOK      2
-#define PITCH_MAX 140
+#define SPEED     (10 << 16)
+#define SENS      ((3 << 16) / 8)
+#define PITCH_MAX (140 << 16)
 #define CLAMP     ((ROOM - 56) << 16)
 #define FOG_START 224
 #define FOG_END   1200
@@ -50,8 +50,8 @@ static i32 cam_x = 0;
 static i32 cam_z = 0;
 static u32 front = 0;
 static i32 printed = 0;
-static u32 yaw = 0;
-static i32 pitch = 0;
+static u32 yaw16 = 0;
+static i32 pitch16 = 0;
 
 static void build_tables(void) {
     volatile u8 *tex = V68_TPU_RAM + TEX_OFF;
@@ -167,56 +167,24 @@ static void submit_tri(u32 tex, const ViewV *v0, const ViewV *v1, const ViewV *v
         v68_3d_tri(v68_3d_flags(0, 0), tex, CMAP_OFF, 0, &s[0], &s[2], &s[3]);
 }
 
-static void draw(u32 tex, u32 fb) {
-    i32 c = v68_fcos(yaw);
-    i32 s = v68_fsin(yaw);
-    i32 cp = v68_fcos((u32)pitch);
-    i32 sp = v68_fsin((u32)pitch);
-
-    V68_TPU_STATE->color_base = fb;
-
-    v68_3d_fill(0, 0, W, H, V68_FILL_COLOR | V68_FILL_Z, 0, 0xFFFF);
-
-    for (i32 f = 0; f < 6; f++) {
-        ViewV v[4];
-
-        for (i32 i = 0; i < 4; i++) {
-            const i16 *p = faces[f][i];
-            i32 dx = (p[0] << 16) - cam_x;
-            i32 dz = (p[2] << 16) - cam_z;
-
-            i32 yv = FX(p[1]);
-            i32 zv = (i32)(((i64)dx * s + (i64)dz * c) >> 16);
-
-            v[i].x = (i32)(((i64)dx * c - (i64)dz * s) >> 16);
-            v[i].y = (i32)(((i64)yv * cp - (i64)zv * sp) >> 16);
-            v[i].z = (i32)(((i64)yv * sp + (i64)zv * cp) >> 16);
-            v[i].u = FX(p[3]);
-            v[i].v = FX(p[4]);
-        }
-
-        submit_tri(tex, &v[0], &v[1], &v[2]);
-        submit_tri(tex, &v[0], &v[2], &v[3]);
-    }
-
-    v68_3d_submit();
-}
-
-static void move(void) {
+static void update(void) {
     u16 pad = *V68_PAD_1;
     i32 mdx = (i16)*V68_MOUSE_X;
     i32 mdy = (i16)*V68_MOUSE_Y;
-    i32 fwd_x = (i32)(((i64)v68_fsin(yaw) * SPEED) >> 16);
-    i32 fwd_z = (i32)(((i64)v68_fcos(yaw) * SPEED) >> 16);
+    i32 fwd_x;
+    i32 fwd_z;
 
-    yaw += (u32)(mdx * LOOK);
-    pitch -= mdy;
+    yaw16 += (u32)(mdx * SENS);
+    pitch16 -= mdy * SENS;
 
-    if (pitch > PITCH_MAX)
-        pitch = PITCH_MAX;
+    if (pitch16 > PITCH_MAX)
+        pitch16 = PITCH_MAX;
 
-    if (pitch < -PITCH_MAX)
-        pitch = -PITCH_MAX;
+    if (pitch16 < -PITCH_MAX)
+        pitch16 = -PITCH_MAX;
+
+    fwd_x = (i32)(((i64)v68_fsin(yaw16 >> 16) * SPEED) >> 16);
+    fwd_z = (i32)(((i64)v68_fcos(yaw16 >> 16) * SPEED) >> 16);
 
     if (pad & V68_PAD_UP) {
         cam_x += fwd_x;
@@ -251,6 +219,41 @@ static void move(void) {
         cam_z = -CLAMP;
 }
 
+static void draw(u32 tex, u32 fb) {
+    i32 c = v68_fcos(yaw16 >> 16);
+    i32 s = v68_fsin(yaw16 >> 16);
+    i32 cp = v68_fcos((u32)(pitch16 >> 16));
+    i32 sp = v68_fsin((u32)(pitch16 >> 16));
+
+    V68_TPU_STATE->color_base = fb;
+
+    v68_3d_fill(0, 0, W, H, V68_FILL_COLOR | V68_FILL_Z, 0, 0xFFFF);
+
+    for (i32 f = 0; f < 6; f++) {
+        ViewV v[4];
+
+        for (i32 i = 0; i < 4; i++) {
+            const i16 *p = faces[f][i];
+            i32 dx = (p[0] << 16) - cam_x;
+            i32 dz = (p[2] << 16) - cam_z;
+
+            i32 yv = FX(p[1]);
+            i32 zv = (i32)(((i64)dx * s + (i64)dz * c) >> 16);
+
+            v[i].x = (i32)(((i64)dx * c - (i64)dz * s) >> 16);
+            v[i].y = (i32)(((i64)yv * cp - (i64)zv * sp) >> 16);
+            v[i].z = (i32)(((i64)yv * sp + (i64)zv * cp) >> 16);
+            v[i].u = FX(p[3]);
+            v[i].v = FX(p[4]);
+        }
+
+        submit_tri(tex, &v[0], &v[1], &v[2]);
+        submit_tri(tex, &v[0], &v[2], &v[3]);
+    }
+
+    v68_3d_submit();
+}
+
 void main(void) {
     u32 tex = v68_3d_tex(TEX_OFF, 6, 6, 4);
 
@@ -264,18 +267,21 @@ void main(void) {
     while (true) {
         u32 back = front ? FB0_OFF : FB1_OFF;
 
-        move();
+        update();
         draw(tex, back);
-
-        if (!printed) {
-            printed = 1;
-            v68_puts("frag ");
-            puthex32((u32)*V68_TPU_PIXELS_HI << 16 | *V68_TPU_PIXELS_LO);
-            *V68_DEBUG_PUTC = '\n';
-        }
 
         v68_3d_fb(back);
         front = !front;
+
+        if (printed < 4) {
+            printed++;
+            v68_puts(printed == 1 ? "frag " : "line ");
+            puthex32(printed == 1
+                         ? (u32)*V68_TPU_PIXELS_HI << 16 | *V68_TPU_PIXELS_LO
+                         : (u32)(*V68_VDP_STATUS & V68_LINE_MASK));
+            *V68_DEBUG_PUTC = '\n';
+        }
+
         v68_wait_vblank();
     }
 }
