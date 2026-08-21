@@ -1,25 +1,3 @@
-//! Layout:
-//!   tiles      VRAM_BASE + 0x0       4096 x 64 B, 8bpp row-major indices
-//!   tilemap n  VRAM_BASE + 0x4_0000 + n*0x8000   128x128 x u16 BE
-//!     entry: [11:0] tile index, [12] H flip, [13] V flip, [14] priority
-//!   sprites    VRAM_BASE + 0x6_0000  128 x 8 B
-//!     x i16, y i16, ctrl ([15] enable, [14] priority, [13] V flip,
-//!     [12] H flip, [11:0] tile), attr ([15:8] palette offset,
-//!     [5:3] height-1, [2:0] width-1, in tiles)
-//!   palette    PALETTE_BASE          256 x u32 BE 0x00RRGGBB
-//!   mode       VDP_MODE              u16: bit0 HIRES, bit1 TPU_PLANE
-//!   fb_base    FB_BASE               u32: byte offset into TPU RAM
-//!
-//! Color index 0 = transparent -> backdrop = palette[0]. Compositing order:
-//! backdrop, planes 0-3 lo, sprites lo, planes 0-2 hi, sprites hi,
-//! plane 3 hi (the UI slot). Lower sprite index wins overlaps.
-//!
-//! HIRES doubles every master-space (320x180) pixel into a 2x2 block of the
-//! 640x360 output. TPU_PLANE replaces plane 0 (both priorities) with the
-//! framebuffer at `TPU_RAM_BASE + fb_base`, sampled 1:1 at the output
-//! resolution and painted opaque (index 0 included) right after the
-//! backdrop.
-
 use crate::bus::{FB_BASE, PALETTE_BASE, TPU_RAM_BASE, VDP_MODE, VRAM_BASE};
 
 pub const WIDTH: usize = 320;
@@ -59,8 +37,6 @@ pub fn render(mem: &[u8], brightness: u8, out: &mut [u32]) {
         paint_framebuffer(mem, w, h, out);
     }
 
-    // TPU_PLANE owns the plane-0 slot entirely: it is skipped at both
-    // priorities, not just suppressed where the framebuffer is opaque.
     let plane_start = if tpu_plane { 1 } else { 0 };
 
     for n in plane_start..TILEMAP_PLANES {
@@ -87,9 +63,6 @@ fn be16(mem: &[u8], a: usize) -> u16 {
     u16::from_be_bytes([mem[a], mem[a + 1]])
 }
 
-// Master-space painting is untouched by hi-res: every helper still iterates
-// the 320x180 grid (scroll tables, sprite clipping) and `zoom` only decides
-// how many output pixels a single master pixel becomes.
 fn paint_plane(mem: &[u8], n: usize, hi: bool, zoom: usize, out: &mut [u32]) {
     let map = TILEMAPS + n * TILEMAP_STRIDE;
     let plane_h = be16(mem, SCROLL + n * 4);
@@ -182,9 +155,6 @@ fn paint_sprites(mem: &[u8], hi: bool, zoom: usize, out: &mut [u32]) {
     }
 }
 
-// TPU_PLANE's plane-0 slot: native resolution, opaque (index 0 included),
-// sampled 1:1 from TPU RAM -- no master-space indexing, unlike every other
-// layer.
 fn paint_framebuffer(mem: &[u8], w: usize, h: usize, out: &mut [u32]) {
     let fb_base = u32::from_be_bytes([
         mem[FB_BASE as usize],
@@ -298,12 +268,12 @@ mod tests {
         set_palette(&mut m, 0, 0x0010_2040);
         set_palette(&mut m, 1, 0x00FF_FFFF);
         checker_tile(&mut m);
-        set_entry(&mut m, 1, 1, 1); // tile 1 at cell (1,1) = pixels (8..16, 8..16)
+        set_entry(&mut m, 1, 1, 1);
         let f = frame(&m);
 
-        assert_eq!(f[8 * WIDTH + 8], 0x00FF_FFFF); // left half: index 1
-        assert_eq!(f[8 * WIDTH + 12], 0x0010_2040); // right half: transparent
-        assert_eq!(f[0], 0x0010_2040); // outside the cell: backdrop
+        assert_eq!(f[8 * WIDTH + 8], 0x00FF_FFFF);
+        assert_eq!(f[8 * WIDTH + 12], 0x0010_2040);
+        assert_eq!(f[0], 0x0010_2040);
     }
 
     #[test]
@@ -311,19 +281,19 @@ mod tests {
         let mut m = vec![0u8; MEM_END as usize];
         set_palette(&mut m, 1, 0x00FF_FFFF);
         checker_tile(&mut m);
-        set_entry(&mut m, 0, 0, 1); // plain
-        set_entry(&mut m, 1, 0, 0x1001); // H flip: white half moves right
-        set_entry(&mut m, 0, 1, 0x2001); // V flip: columns unchanged
-        set_entry(&mut m, 1, 1, 0x3001); // H+V
+        set_entry(&mut m, 0, 0, 1);
+        set_entry(&mut m, 1, 0, 0x1001);
+        set_entry(&mut m, 0, 1, 0x2001);
+        set_entry(&mut m, 1, 1, 0x3001);
         let f = frame(&m);
         let white = 0x00FF_FFFF;
 
-        assert_eq!(f[0], white); // plain: left white
-        assert_ne!(f[7], white); // plain: right transparent
-        assert_ne!(f[8], white); // H flip: left transparent
-        assert_eq!(f[15], white); // H flip: right white
-        assert_eq!(f[8 * WIDTH], white); // V flip: still left white
-        assert_eq!(f[8 * WIDTH + 15], white); // H+V: right white
+        assert_eq!(f[0], white);
+        assert_ne!(f[7], white);
+        assert_ne!(f[8], white);
+        assert_eq!(f[15], white);
+        assert_eq!(f[8 * WIDTH], white);
+        assert_eq!(f[8 * WIDTH + 15], white);
     }
 
     #[test]
@@ -344,13 +314,13 @@ mod tests {
         let mut m = vec![0u8; MEM_END as usize];
         set_palette(&mut m, 1, 0x00FF_FFFF);
         checker_tile(&mut m);
-        set_entry(&mut m, 0, 0, 1); // white left half at cell (0,0)
-        set_entry(&mut m, 127, 0, 1); // and at the map's last column
+        set_entry(&mut m, 0, 0, 1);
+        set_entry(&mut m, 127, 0, 1);
 
-        set_scroll(&mut m, 0, 4, 0); // shift left by 4: transparent half lands at x=0
+        set_scroll(&mut m, 0, 4, 0);
         assert_ne!(frame(&m)[0], 0x00FF_FFFF);
 
-        set_scroll(&mut m, 0, 1016, 0); // wrap: cell 127 appears at x=0
+        set_scroll(&mut m, 0, 1016, 0);
         assert_eq!(frame(&m)[0], 0x00FF_FFFF);
     }
 
@@ -362,13 +332,11 @@ mod tests {
         set_entry(&mut m, 0, 0, 1);
         set_entry(&mut m, 1, 0, 1);
 
-        // line 0 shifted by 4, line 1 untouched
         m[SCROLL_LINE_H..][..2].copy_from_slice(&4u16.to_be_bytes());
         let f = frame(&m);
         assert_ne!(f[0], 0x00FF_FFFF);
         assert_eq!(f[WIDTH], 0x00FF_FFFF);
 
-        // column 0 shifted down a tile row, column 1 (cell (1,0)) untouched
         m[SCROLL_LINE_H..][..2].copy_from_slice(&0u16.to_be_bytes());
         m[SCROLL_COL_V..][..2].copy_from_slice(&8u16.to_be_bytes());
         let f = frame(&m);
@@ -382,12 +350,12 @@ mod tests {
         set_palette(&mut m, 1, 0x0011_1111);
         set_palette(&mut m, 2, 0x0022_2222);
         checker_tile(&mut m);
-        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2); // tile 2: solid index 2
-        set_entry(&mut m, 0, 0, 1); // plane 0: checker
-        m[TILEMAPS + 0x8000..][..2].copy_from_slice(&2u16.to_be_bytes()); // plane 1 cell (0,0): solid
+        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2);
+        set_entry(&mut m, 0, 0, 1);
+        m[TILEMAPS + 0x8000..][..2].copy_from_slice(&2u16.to_be_bytes());
         let f = frame(&m);
 
-        assert_eq!(f[0], 0x0022_2222); // plane 1 covers plane 0
+        assert_eq!(f[0], 0x0022_2222);
     }
 
     #[test]
@@ -397,15 +365,15 @@ mod tests {
         set_palette(&mut m, 1, 0x00FF_FFFF);
         set_palette(&mut m, 17, 0x00FF_0000);
         checker_tile(&mut m);
-        set_sprite(&mut m, 0, 10, 20, 0x8001, 0); // 8x8, tile 1
-        set_sprite(&mut m, 1, -2, 40, 0x8001, 0); // clipped at left edge
-        set_sprite(&mut m, 2, 30, 60, 0x8001, 16 << 8); // palette offset 16
+        set_sprite(&mut m, 0, 10, 20, 0x8001, 0);
+        set_sprite(&mut m, 1, -2, 40, 0x8001, 0);
+        set_sprite(&mut m, 2, 30, 60, 0x8001, 16 << 8);
         let f = frame(&m);
 
-        assert_eq!(f[20 * WIDTH + 10], 0x00FF_FFFF); // index-1 half
-        assert_eq!(f[20 * WIDTH + 16], 0x0010_2040); // transparent half: backdrop
-        assert_eq!(f[40 * WIDTH], 0x00FF_FFFF); // clipped sprite still draws on-screen part
-        assert_eq!(f[60 * WIDTH + 30], 0x00FF_0000); // 1 + 16 = palette[17]
+        assert_eq!(f[20 * WIDTH + 10], 0x00FF_FFFF);
+        assert_eq!(f[20 * WIDTH + 16], 0x0010_2040);
+        assert_eq!(f[40 * WIDTH], 0x00FF_FFFF);
+        assert_eq!(f[60 * WIDTH + 30], 0x00FF_0000);
     }
 
     #[test]
@@ -415,18 +383,18 @@ mod tests {
         set_palette(&mut m, 2, 0x0022_2222);
         set_palette(&mut m, 3, 0x0033_3333);
         checker_tile(&mut m);
-        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2); // tile 2: solid index 2
-        m[VRAM_BASE as usize + 192..VRAM_BASE as usize + 256].fill(3); // tile 3: solid index 3
-        set_entry(&mut m, 0, 0, 0x4002); // plane 0 hi: solid tile 2
-        set_sprite(&mut m, 0, 0, 0, 0x8001, 0); // lo sprite: under hi plane
-        set_sprite(&mut m, 1, 4, 0, 0xC001, 0); // hi sprite: over hi plane
+        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2);
+        m[VRAM_BASE as usize + 192..VRAM_BASE as usize + 256].fill(3);
+        set_entry(&mut m, 0, 0, 0x4002);
+        set_sprite(&mut m, 0, 0, 0, 0x8001, 0);
+        set_sprite(&mut m, 1, 4, 0, 0xC001, 0);
         let map3 = TILEMAPS + 3 * 0x8000;
-        m[map3 + 2..map3 + 4].copy_from_slice(&0x4003u16.to_be_bytes()); // plane 3 hi cell (1,0)
+        m[map3 + 2..map3 + 4].copy_from_slice(&0x4003u16.to_be_bytes());
         let f = frame(&m);
 
-        assert_eq!(f[0], 0x0022_2222); // hi plane covers lo sprite
-        assert_eq!(f[4], 0x0011_1111); // hi sprite covers hi plane
-        assert_eq!(f[8], 0x0033_3333); // plane 3 hi (UI) covers hi sprite
+        assert_eq!(f[0], 0x0022_2222);
+        assert_eq!(f[4], 0x0011_1111);
+        assert_eq!(f[8], 0x0033_3333);
     }
 
     #[test]
@@ -439,27 +407,23 @@ mod tests {
         set_sprite(&mut m, 1, 0, 0, 0x8001, 16 << 8);
         let f = frame(&m);
 
-        assert_eq!(f[0], 0x0011_1111); // sprite 0 in front of sprite 1
+        assert_eq!(f[0], 0x0011_1111);
     }
 
     #[test]
     fn lores_render_is_bit_identical_with_mode_zero() {
-        // golden-guard: the `sprite_priority_and_ui_slot` fixture (planes
-        // hi/lo, sprites hi/lo, the plane-3 UI slot), rendered through the
-        // mode-aware entry point with the mode word explicitly zero -- must
-        // composite pixel for pixel exactly as the pre-hires machine did.
         let mut m = vec![0u8; MEM_END as usize];
         set_palette(&mut m, 1, 0x0011_1111);
         set_palette(&mut m, 2, 0x0022_2222);
         set_palette(&mut m, 3, 0x0033_3333);
         checker_tile(&mut m);
-        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2); // tile 2: solid index 2
-        m[VRAM_BASE as usize + 192..VRAM_BASE as usize + 256].fill(3); // tile 3: solid index 3
-        set_entry(&mut m, 0, 0, 0x4002); // plane 0 hi: solid tile 2
-        set_sprite(&mut m, 0, 0, 0, 0x8001, 0); // lo sprite: under hi plane
-        set_sprite(&mut m, 1, 4, 0, 0xC001, 0); // hi sprite: over hi plane
+        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2);
+        m[VRAM_BASE as usize + 192..VRAM_BASE as usize + 256].fill(3);
+        set_entry(&mut m, 0, 0, 0x4002);
+        set_sprite(&mut m, 0, 0, 0, 0x8001, 0);
+        set_sprite(&mut m, 1, 4, 0, 0xC001, 0);
         let map3 = TILEMAPS + 3 * 0x8000;
-        m[map3 + 2..map3 + 4].copy_from_slice(&0x4003u16.to_be_bytes()); // plane 3 hi cell (1,0)
+        m[map3 + 2..map3 + 4].copy_from_slice(&0x4003u16.to_be_bytes());
         set_mode(&mut m, 0);
 
         assert_eq!(mode(&m), (WIDTH, HEIGHT));
@@ -467,28 +431,26 @@ mod tests {
         let mut out = vec![0u32; WIDTH * HEIGHT];
         render(&m, 255, &mut out);
 
-        assert_eq!(out[0], 0x0022_2222); // hi plane covers lo sprite
-        assert_eq!(out[4], 0x0011_1111); // hi sprite covers hi plane
-        assert_eq!(out[8], 0x0033_3333); // plane 3 hi (UI) covers hi sprite
+        assert_eq!(out[0], 0x0022_2222);
+        assert_eq!(out[4], 0x0011_1111);
+        assert_eq!(out[8], 0x0033_3333);
     }
 
     #[test]
     fn hires_doubles_tiles_and_samples_the_fb_native() {
         let mut m = vec![0u8; MEM_END as usize];
-        set_palette(&mut m, 0, 0x0010_2030); // backdrop
-        set_palette(&mut m, 1, 0x00AA_BBCC); // tile pixel
-        set_palette(&mut m, 4, 0x0033_4455); // fb pixel
+        set_palette(&mut m, 0, 0x0010_2030);
+        set_palette(&mut m, 1, 0x00AA_BBCC);
+        set_palette(&mut m, 4, 0x0033_4455);
 
-        // plane 1 (plane 0 is suppressed by TPU_PLANE): a single tile pixel
-        // at local tile coords (3,2) of tile 1, cell (0,0) -> master (3,2).
         m[VRAM_BASE as usize + 64 + 2 * 8 + 3] = 1;
         let plane1_map = TILEMAPS + TILEMAP_STRIDE;
         m[plane1_map..plane1_map + 2].copy_from_slice(&1u16.to_be_bytes());
 
         set_fb_base(&mut m, 0);
-        m[TPU_RAM_BASE as usize + 640 + 5] = 4; // fb index 4 at native (5,1)
+        m[TPU_RAM_BASE as usize + 640 + 5] = 4;
 
-        set_mode(&mut m, 0b11); // HIRES | TPU_PLANE
+        set_mode(&mut m, 0b11);
 
         assert_eq!(mode(&m), (WIDTH * 2, HEIGHT * 2));
 
@@ -513,12 +475,12 @@ mod tests {
         set_palette(&mut m, 1, 0x00AA_BBCC);
         set_palette(&mut m, 2, 0x0033_4455);
         checker_tile(&mut m);
-        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2); // tile 2: solid index 2
+        m[VRAM_BASE as usize + 128..VRAM_BASE as usize + 192].fill(2);
 
-        set_entry(&mut m, 0, 0, 1); // plane 0 lo: checker tile
-        set_entry(&mut m, 5, 5, 0x4002); // plane 0 hi: solid tile 2
+        set_entry(&mut m, 0, 0, 1);
+        set_entry(&mut m, 5, 5, 0x4002);
 
-        set_mode(&mut m, 0b10); // TPU_PLANE only
+        set_mode(&mut m, 0b10);
 
         assert_eq!(mode(&m), (WIDTH, HEIGHT));
 
@@ -526,7 +488,10 @@ mod tests {
         render(&m, 255, &mut out);
 
         let backdrop = 0x0010_2030;
-        assert_eq!(out[0], backdrop, "plane 0 lo must not paint while TPU_PLANE is set");
+        assert_eq!(
+            out[0], backdrop,
+            "plane 0 lo must not paint while TPU_PLANE is set"
+        );
         assert_eq!(
             out[40 * WIDTH + 40],
             backdrop,

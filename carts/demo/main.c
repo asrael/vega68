@@ -11,7 +11,6 @@
 #define SPRITE_EDGE 0x00FFFFFF
 #define SPRITE_TILE 1
 
-// intro (once): brass call, harp answers with a rising 16th flourish
 static const char *intro_lead[] = { "c4 e4 g4 c5", "c5" };
 static const char *intro_harp[] = {
     "~",
@@ -60,7 +59,7 @@ static const V68Section body_section = { .tracks = body_tracks, .track_count = 5
 static const V68Section fanfare_sections[] = { intro_section, body_section };
 static const V68Song fanfare = { .sections = fanfare_sections, .section_count = 2, .loop_section = 1 };
 
-static const u8 echo_fir[8] = { 90, 40, 18, 8, 4, 2, 1, 1 }; // dark set: hall tail, no ring
+static const u8 echo_fir[8] = { 90, 40, 18, 8, 4, 2, 1, 1 };
 
 static u32 dim(u32 rgb, u32 b) {
     return ((((rgb >> 16) & 0xFF) * b / 255) << 16) |
@@ -89,7 +88,7 @@ static void setup(void) {
     V68_PALETTE[0] = 0x00102040;
     V68_PALETTE[1] = 0x003A3050;
 
-    *V68_AUDIO_EDELAY = 20; // 80 ms
+    *V68_AUDIO_EDELAY = 20;
     *V68_AUDIO_EFB = 70;
     *V68_AUDIO_EVOL_L = 80;
     *V68_AUDIO_EVOL_R = 80;

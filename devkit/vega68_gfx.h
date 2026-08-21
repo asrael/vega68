@@ -3,16 +3,12 @@
 
 #include "vega68_hw.h"
 
-// 16.16 throughout: uq = u*q, vq = v*q and q = 1/w are premultiplied here,
-// shade selects the colormap row (integer part 0..63).
 typedef struct { i32 x, y, z, uq, vq, q, shade; } V68Vert;
 
-// TRI w1: [31:12] texture offset >> 3, [11:8] log2w, [7:4] log2h, [3:0] mips
 static inline u32 v68_3d_tex(u32 tex_off, u32 log2w, u32 log2h, u32 levels) {
     return (tex_off >> 3) << 12 | (log2w & 0xF) << 8 | (log2h & 0xF) << 4 | (levels & 0xF);
 }
 
-// TRI w0: opcode, s4.4 LOD bias, V68_TRI_* flags
 static inline u32 v68_3d_flags(i32 lod_bias, u32 flags) {
     return (u32)V68_TPU_OP_TRI << 24 | ((u32)lod_bias & 0xFF) << 8 | (flags & 0xFF);
 }

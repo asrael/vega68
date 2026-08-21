@@ -1,15 +1,3 @@
-//! vega68 <cart.v68> [--headless N] [--scale K]
-//!
-//! the bios image is burned into the binary (`bios/vega68.rom`, written by
-//! `cargo xtask bios`), not built on demand.
-//!
-//! windowed: runs the cart at 60 Hz in a resizable winit window, letterboxed
-//! to the largest integer scale that fits. the initial size is the largest
-//! integer scale the monitor holds, capped at 6x (1920x1080); --scale K
-//! overrides it.
-//!
-//! headless (CI): runs N frames, printing an fnv1a64 hash of each frame.
-
 use vega68::System;
 use vega68::apu::out::AudioOut;
 use vega68::bus;
@@ -34,7 +22,6 @@ const FRAME: Duration = Duration::from_nanos(16_666_667);
 const STICK_LOOK: f64 = 24.0;
 const LOOK_SMOOTH: f64 = 0.5;
 
-/// 6x = 1920x1080.
 const MAX_SCALE: usize = 6;
 const FALLBACK_SCALE: usize = 4;
 
@@ -58,18 +45,6 @@ fn auto_scale(monitor: Option<(u32, u32)>) -> usize {
 fn die(msg: &str) -> ! {
     eprintln!("{msg}");
     std::process::exit(1);
-}
-
-fn fnv1a64(data: &[u32]) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-
-    for px in data {
-        for b in px.to_le_bytes() {
-            h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
-        }
-    }
-
-    h
 }
 
 struct Watch {
@@ -136,7 +111,10 @@ fn run_headless(mut sys: System, frames: u64, mut watch: Option<Watch>) {
         }
 
         sys.render(&mut frame);
-        println!("frame {i} {:016x}", fnv1a64(&frame));
+        println!(
+            "frame {i} {:016x}",
+            vega68::fnv1a64(frame.iter().flat_map(|p| p.to_le_bytes()))
+        );
     }
 }
 
@@ -207,15 +185,11 @@ struct Vega68 {
     window: Option<Rc<Window>>,
 }
 
-// Thin, master-space-fixed aliases kept for the existing test table below;
-// the live render path always goes through the mode-aware `_for` versions.
 #[cfg(test)]
 fn blit(frame: &[u32], out: &mut [u32], surface_w: usize, surface_h: usize) {
     blit_for(frame, out, WIDTH, HEIGHT, surface_w, surface_h);
 }
 
-// `blit` fixed to master-space (320x180); `blit_for` takes the current
-// mode's dims so hi-res (640x360) letterboxes the same way.
 fn blit_for(
     frame: &[u32],
     out: &mut [u32],
@@ -271,10 +245,10 @@ fn gamepad_bit(button: Button) -> Option<u16> {
         Button::DPadDown => bus::PAD_DOWN,
         Button::DPadLeft => bus::PAD_LEFT,
         Button::DPadRight => bus::PAD_RIGHT,
-        Button::East => bus::PAD_A,  // right face
-        Button::South => bus::PAD_B, // bottom face
-        Button::North => bus::PAD_X, // top face
-        Button::West => bus::PAD_Y,  // left face
+        Button::East => bus::PAD_A,
+        Button::South => bus::PAD_B,
+        Button::North => bus::PAD_X,
+        Button::West => bus::PAD_Y,
         Button::Start => bus::PAD_START,
         Button::Select => bus::PAD_SELECT,
         Button::LeftTrigger => bus::PAD_L,
@@ -397,7 +371,6 @@ impl Vega68 {
                     }
                 }
 
-                // left stick aliases the D-pad
                 EventType::AxisChanged(Axis::LeftStickX, v, _) => {
                     self.stick &= !(1 << 2 | 1 << 3);
 
@@ -418,8 +391,6 @@ impl Vega68 {
                     }
                 }
 
-                // right stick is look: it feeds the same delta registers as
-                // the captured mouse, stick-up meaning look-up
                 EventType::AxisChanged(Axis::RightStickX, v, _) => {
                     self.rstick.0 = if v.abs() > 0.15 { v as f64 } else { 0.0 };
                 }
@@ -446,7 +417,6 @@ impl ApplicationHandler for Vega68 {
             self.sys.bus.pads[0] = self.pad | self.gamepad | self.stick;
             self.look.0 += self.rstick.0 * STICK_LOOK;
             self.look.1 += self.rstick.1 * STICK_LOOK;
-            // release a fraction per frame: smoothing that never drops counts
             let (dx, dy) = (
                 (self.look.0 * LOOK_SMOOTH) as i16,
                 (self.look.1 * LOOK_SMOOTH) as i16,
@@ -588,15 +558,15 @@ mod tests {
     #[test]
     fn auto_scale_matches_the_worked_table() {
         let cases: [(u32, u32, usize); 9] = [
-            (1366, 768, 4),   // x220t: 4x = 1280x720 must fit
-            (1920, 1080, 6),  // exactly 6x, the window fills the screen
-            (2560, 1440, 6),  // capped at 6x
-            (3440, 1440, 6),  // capped: width allows 10x, height 7x
-            (3840, 2160, 6),  // capped
-            (1280, 800, 4),   // width is the exact limit
-            (1024, 768, 3),   // width binds before height
-            (640, 480, 2),    //
-            (320, 180, 1),    // below one scale step: clamped up, letterboxed
+            (1366, 768, 4),
+            (1920, 1080, 6),
+            (2560, 1440, 6),
+            (3440, 1440, 6),
+            (3840, 2160, 6),
+            (1280, 800, 4),
+            (1024, 768, 3),
+            (640, 480, 2),
+            (320, 180, 1),
         ];
 
         for (w, h, scale) in cases {

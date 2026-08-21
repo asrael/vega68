@@ -1,5 +1,5 @@
-use super::fm::FM_OP_OFFSET;
 use super::Apu;
+use super::fm::FM_OP_OFFSET;
 
 pub(super) const KEYON_ADDR: u32 = 0x400;
 pub(super) const LFO_ADDR: u32 = 0x401;
@@ -23,8 +23,6 @@ pub(super) fn peak_i(frame: &[i16]) -> i16 {
     frame.iter().map(|&s| s.abs()).max().unwrap()
 }
 
-// Peak over the frame's tail (from `skip` stereo samples on), past any
-// pre-hold transient at the start of a frame.
 pub(super) fn tail_peak(frame: &[i16], skip: usize) -> i16 {
     frame[skip * 2..].iter().map(|&s| s.abs()).max().unwrap()
 }
@@ -42,13 +40,13 @@ pub(super) fn fm_setup(a: &mut Apu, ch: usize, alg: u8, fnum: u16, block: u8) {
     let base = (ch * 0x40) as u32;
 
     for &o in &FM_OP_OFFSET {
-        a.write(base + o, 0x01); // DT 0, MUL 1
-        a.write(base + o + 1, 0); // TL 0
-        a.write(base + o + 2, 0x1F); // KS 0, AR 31
-        a.write(base + o + 5, 0); // SL 0, RR 0
+        a.write(base + o, 0x01);
+        a.write(base + o + 1, 0);
+        a.write(base + o + 2, 0x1F);
+        a.write(base + o + 5, 0);
     }
 
-    a.write(base + 0x1E, alg); // FB 0
+    a.write(base + 0x1E, alg);
     write_be16(a, base + 0x1C, ((block as u16) << 11) | fnum);
 }
 

@@ -1,4 +1,4 @@
-#![allow(dead_code)] // each test binary pulls in only the part of the harness it needs
+#![allow(dead_code)]
 
 use vega68::System;
 
@@ -14,29 +14,7 @@ pub fn assert_cart(fixture: &str, expected: &str) -> Option<System> {
     let (bios, file) = build(fixture)?;
     let mut sys = System::new(&bios, &file).unwrap();
 
-    for frame in 0..MAX_FRAMES {
-        sys.run_frame();
-
-        if sys.bus.debug_out.contains(&DONE) {
-            break;
-        }
-
-        assert!(
-            frame + 1 < MAX_FRAMES,
-            "{fixture} did not finish in {MAX_FRAMES} frames; output so far:\n{}",
-            String::from_utf8_lossy(&sys.bus.debug_out)
-        );
-    }
-
-    let mut want = expected.as_bytes().to_vec();
-    want.push(DONE);
-
-    let cut = sys.bus.debug_out.iter().position(|&b| b == DONE).unwrap() + 1;
-
-    assert_eq!(
-        String::from_utf8_lossy(&sys.bus.debug_out[..cut]),
-        String::from_utf8_lossy(&want)
-    );
+    wait_for_done(&mut sys, 0, expected);
 
     Some(sys)
 }
@@ -75,21 +53,11 @@ pub fn build_dir(rel: &str) -> Option<(Vec<u8>, Vec<u8>)> {
 }
 
 pub fn fnv1a64(frame: &[i16]) -> u64 {
-    hash(frame.iter().flat_map(|s| s.to_le_bytes()))
+    vega68::fnv1a64(frame.iter().flat_map(|s| s.to_le_bytes()))
 }
 
 pub fn fnv1a64_pixels(frame: &[u32]) -> u64 {
-    hash(frame.iter().flat_map(|p| p.to_le_bytes()))
-}
-
-fn hash(bytes: impl IntoIterator<Item = u8>) -> u64 {
-    let mut h = 0xcbf2_9ce4_8422_2325u64;
-
-    for b in bytes {
-        h = (h ^ b as u64).wrapping_mul(0x0000_0100_0000_01b3);
-    }
-
-    h
+    vega68::fnv1a64(frame.iter().flat_map(|p| p.to_le_bytes()))
 }
 
 pub fn run_until(sys: &mut System, from: usize, needle: &str) {
@@ -108,6 +76,30 @@ pub fn run_until(sys: &mut System, from: usize, needle: &str) {
             frame + 1 < MAX_FRAMES,
             "{needle:?} never appeared in {MAX_FRAMES} frames; output so far:\n{}",
             String::from_utf8_lossy(&sys.bus.debug_out)
+        );
+    }
+}
+
+pub fn wait_for_done(sys: &mut System, from: usize, expected: &str) {
+    for frame in 0..MAX_FRAMES {
+        sys.run_frame();
+
+        if let Some(pos) = sys.bus.debug_out[from..].iter().position(|&b| b == DONE) {
+            let cut = from + pos + 1;
+            let mut want = expected.as_bytes().to_vec();
+            want.push(DONE);
+
+            assert_eq!(
+                String::from_utf8_lossy(&sys.bus.debug_out[from..cut]),
+                String::from_utf8_lossy(&want)
+            );
+            return;
+        }
+
+        assert!(
+            frame + 1 < MAX_FRAMES,
+            "{expected:?} did not finish in {MAX_FRAMES} frames; output so far:\n{}",
+            String::from_utf8_lossy(&sys.bus.debug_out[from..])
         );
     }
 }

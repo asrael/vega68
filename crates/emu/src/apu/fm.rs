@@ -31,7 +31,6 @@ fn op_eval(phase: f64, mod_in: f64, amp: f64) -> f64 {
     (std::f64::consts::TAU * (phase + mod_in)).sin() * amp
 }
 
-// SSG-EG mode bits [2:0] -> (invert, alternate, hold).
 fn ssg_mode(ssg: u8) -> (bool, bool, bool) {
     match ssg & 0x07 {
         0 => (false, false, false),
@@ -46,9 +45,6 @@ fn ssg_mode(ssg: u8) -> (bool, bool, bool) {
     }
 }
 
-// Mod sources feeding operator `op` (0-indexed) and whether it is a carrier.
-// Op 1 (index 0) never appears as a source here; its only modulation input is
-// channel feedback, applied by the caller.
 pub(super) fn algorithm(alg: u8, op: usize) -> (&'static [usize], bool) {
     match (alg, op) {
         (0, 0) => (&[], false),
@@ -124,8 +120,6 @@ impl Default for Eg {
 }
 
 impl Eg {
-    // `ams_add` layers on top of the EG's own attenuation without mutating it.
-    // SSG-EG invert reflects the attenuation around max before AMS is added.
     fn amp_with(&self, ams_add: f64) -> f64 {
         if self.phase == Phase::Release && self.att == 1023 && ams_add == 0.0 && !self.ssg_inv {
             return 0.0;
@@ -141,7 +135,6 @@ impl Eg {
         10f64.powf(-att * 0.09375 / 20.0)
     }
 
-    // Applies one already rate/period-gated increment (see `Apu::eg_tick`).
     fn apply(&mut self, inc: u16, sl_att: u16) {
         match self.phase {
             Phase::Attack => {
@@ -189,18 +182,10 @@ impl Apu {
 
         for ch in 0..8 {
             let base = ch * 0x40;
-            let per_op_freq = self.regs[base + 0x28] & 0x01 != 0;
-            let chan_freq_word =
-                u16::from_be_bytes([self.regs[base + 0x1C], self.regs[base + 0x1D]]);
 
             for (op, &off) in FM_OP_OFFSET.iter().enumerate() {
                 let o = base + off as usize;
-                let freq_word = if per_op_freq {
-                    let fo = base + 0x20 + 2 * op;
-                    u16::from_be_bytes([self.regs[fo], self.regs[fo + 1]])
-                } else {
-                    chan_freq_word
-                };
+                let freq_word = self.op_freq_word(base, op);
 
                 let block = (freq_word >> 11) & 0x07;
                 let fnum = freq_word & 0x7FF;
@@ -224,7 +209,7 @@ impl Apu {
                 };
 
                 if rate == 0 {
-                    continue; // phase param 0: this phase never moves
+                    continue;
                 }
 
                 let ssg = self.regs[o + 6];
@@ -237,7 +222,7 @@ impl Apu {
                         shift = shift.saturating_sub(2);
                     }
                     if self.eg_counter & ((1 << shift) - 1) != 0 {
-                        continue; // not this tick's turn for this R's period
+                        continue;
                     }
                     4 + (r & 3)
                 } else {
@@ -250,7 +235,7 @@ impl Apu {
 
                 let eg = &mut self.fm[ch].env[op];
                 if ssg_active && eg.ssg_held {
-                    continue; // hold mode: frozen since the last threshold cross
+                    continue;
                 }
 
                 eg.apply(inc, sl_att);
@@ -258,14 +243,13 @@ impl Apu {
                 if ssg_active && eg.att >= 0x200 {
                     let (_, alt, hold) = ssg_mode(ssg);
                     if hold {
-                        // alt+hold: one alternation on the way into hold, then frozen.
                         if alt && !eg.ssg_held {
                             eg.ssg_inv = !eg.ssg_inv;
                         }
 
                         eg.ssg_held = true;
                     } else {
-                        eg.att -= 0x200; // loop: wrap back below the threshold
+                        eg.att -= 0x200;
                         if alt {
                             eg.ssg_inv = !eg.ssg_inv;
                         }
@@ -283,13 +267,10 @@ impl Apu {
         let ams = ((pan_ams_fms >> 4) & 0x03) as usize;
         let fms = (pan_ams_fms & 0x07) as usize;
         let ctrl = self.regs[base + 0x28];
-        let per_op_freq = ctrl & 0x01 != 0;
 
         let lfo_word = self.regs[LFO as usize];
         let lfo_on = lfo_word & 0x08 != 0;
         let lfo_tri = if lfo_on { tri(self.lfo_phase) } else { 0.0 };
-
-        let chan_freq_word = u16::from_be_bytes([self.regs[base + 0x1C], self.regs[base + 0x1D]]);
 
         let mut op_freq = [0.0; 4];
         let mut tl = [0u8; 4];
@@ -302,12 +283,7 @@ impl Apu {
             let mul = dt_mul & 0x0F;
             let mul_factor = if mul == 0 { 0.5 } else { mul as f64 };
 
-            let freq_word = if per_op_freq {
-                let fo = base + 0x20 + 2 * op;
-                u16::from_be_bytes([self.regs[fo], self.regs[fo + 1]])
-            } else {
-                chan_freq_word
-            };
+            let freq_word = self.op_freq_word(base, op);
             let block = ((freq_word >> 11) & 0x07) as u8;
             let fnum = freq_word & 0x7FF;
             let mut base_freq = Self::fm_freq_hz(fnum, block);
@@ -405,6 +381,16 @@ impl Apu {
             }
         }
     }
+
+    fn op_freq_word(&self, base: usize, op: usize) -> u16 {
+        let at = if self.regs[base + 0x28] & 0x01 != 0 {
+            base + 0x20 + 2 * op
+        } else {
+            base + 0x1C
+        };
+
+        u16::from_be_bytes([self.regs[at], self.regs[at + 1]])
+    }
 }
 
 #[cfg(test)]
@@ -425,15 +411,15 @@ mod tests {
         fm_setup(&mut a, 0, 7, 1083, 4);
 
         for op in 1..4 {
-            a.write(op * 7 + 1, 127); // ops 2-4 TL max = silent
+            a.write(op * 7 + 1, 127);
         }
 
-        a.write(KEYON_ADDR, 0xF0); // all ops, ch 0
+        a.write(KEYON_ADDR, 0xF0);
 
         run_frame(&mut a, &[]);
         let one_op = peak(&a.frame);
 
-        a.write(7 + 1, 0); // op 2 TL 0
+        a.write(7 + 1, 0);
         run_frame(&mut a, &[]);
 
         assert!(peak(&a.frame) > one_op * 1.7, "second carrier did not add");
@@ -442,13 +428,13 @@ mod tests {
     #[test]
     fn modulation_changes_the_waveform() {
         let mut a = Apu::new();
-        fm_setup(&mut a, 0, 0, 1083, 4); // alg 0: 1->2->3->4 chain
+        fm_setup(&mut a, 0, 0, 1083, 4);
         a.write(KEYON_ADDR, 0xF0);
         run_frame(&mut a, &[]);
 
         let mut b = Apu::new();
         fm_setup(&mut b, 0, 0, 1083, 4);
-        b.write(0x01, 127); // silence the modulator chain's head
+        b.write(0x01, 127);
         b.write(KEYON_ADDR, 0xF0);
         run_frame(&mut b, &[]);
 
@@ -475,13 +461,13 @@ mod tests {
         let mut a = Apu::new();
 
         fm_setup(&mut a, 0, 7, 1083, 4);
-        a.write(0x05, 0x0F); // op 1 SL=0, RR=15
-        a.write(KEYON_ADDR, 0x10); // op 1 only
+        a.write(0x05, 0x0F);
+        a.write(KEYON_ADDR, 0x10);
 
         run_frame(&mut a, &[]);
         assert!(peak(&a.frame) > 0.0, "keyed channel is silent");
 
-        a.write(KEYON_ADDR, 0x00); // key off
+        a.write(KEYON_ADDR, 0x00);
 
         for _ in 0..30 {
             run_frame(&mut a, &[]);
@@ -504,15 +490,15 @@ mod tests {
 
         let mut b = Apu::new();
         fm_setup(&mut b, 0, 7, 1083, 4);
-        b.write(LFO_ADDR, 0x0F); // LFO on, 72.2 Hz
-        b.write(0x1F, 0xC0 | 0x07); // pan L|R, FMS max
+        b.write(LFO_ADDR, 0x0F);
+        b.write(0x1F, 0xC0 | 0x07);
         b.write(KEYON_ADDR, 0xF0);
         run_frame(&mut b, &[]);
         assert_ne!(b.frame, steady, "FMS did not modulate");
 
-        a.write(LFO_ADDR, 0x0F); // LFO on, 72.2 Hz
-        a.write(0x1F, 0xC0 | 0x30); // AMS max, FMS off
-        a.write(0x03, 0x80); // op 1 AM enable (AM/DR byte)
+        a.write(LFO_ADDR, 0x0F);
+        a.write(0x1F, 0xC0 | 0x30);
+        a.write(0x03, 0x80);
 
         let peaks: Vec<i16> = (0..8)
             .map(|_| {
@@ -533,8 +519,8 @@ mod tests {
 
         let mut a = Apu::new();
         fm_setup(&mut a, 0, 7, 1083, 4);
-        a.write(0x03, 31); // op 1 DR max (AM/DR byte, AM disabled)
-        a.write(0x05, 0xF0); // op 1 SL=15 (decay target = full attenuation), RR=0
+        a.write(0x03, 31);
+        a.write(0x05, 0xF0);
         a.write(KEYON_ADDR, 0x10);
 
         for _ in 0..FRAMES {
@@ -547,7 +533,7 @@ mod tests {
         fm_setup(&mut b, 0, 7, 1083, 4);
         b.write(0x03, 31);
         b.write(0x05, 0xF0);
-        b.write(0x06, 0b1101); // SSG-EG: enable, invert + hold
+        b.write(0x06, 0b1101);
         b.write(KEYON_ADDR, 0x10);
 
         for _ in 0..FRAMES {
@@ -559,23 +545,23 @@ mod tests {
 
     #[test]
     fn ssg_eg_alt_plus_hold_applies_one_toggle_before_freezing() {
-        const SKIP: usize = 50; // stereo samples: past the pre-hold Attack/Decay transient
+        const SKIP: usize = 50;
 
         fn drain_setup(a: &mut Apu, ssg: u8) {
             fm_setup(a, 0, 7, 1083, 4);
-            a.write(0x03, 31); // op 1 DR max
-            a.write(0x05, 0xF0); // op 1 SL=15, RR=0
+            a.write(0x03, 31);
+            a.write(0x05, 0xF0);
             a.write(0x06, ssg);
             a.write(KEYON_ADDR, 0x10);
         }
 
         let mut hold_only = Apu::new();
-        drain_setup(&mut hold_only, 0b1001); // SSG-EG: enable, hold, no alternate
+        drain_setup(&mut hold_only, 0b1001);
         run_frame(&mut hold_only, &[]);
         let hold_tail = tail_peak(&hold_only.frame, SKIP);
 
         let mut alt_hold = Apu::new();
-        drain_setup(&mut alt_hold, 0b1011); // SSG-EG: enable, alternate + hold
+        drain_setup(&mut alt_hold, 0b1011);
         run_frame(&mut alt_hold, &[]);
         let alt_hold_tail = tail_peak(&alt_hold.frame, SKIP);
 
@@ -590,11 +576,11 @@ mod tests {
         let mut a = Apu::new();
 
         fm_setup(&mut a, 0, 7, 1083, 4);
-        a.write(0x01, 127); // op 1 TL max
-        a.write(0x03, 0x80); // op 1 AM enable
-        a.write(0x1F, 0xC0 | 0x30); // AMS max, FMS off
-        a.write(LFO_ADDR, 0x0F); // LFO on, max rate
-        a.write(KEYON_ADDR, 0x10); // op 1 only
+        a.write(0x01, 127);
+        a.write(0x03, 0x80);
+        a.write(0x1F, 0xC0 | 0x30);
+        a.write(LFO_ADDR, 0x0F);
+        a.write(KEYON_ADDR, 0x10);
 
         run_frame(&mut a, &[]);
         assert!(
@@ -612,7 +598,7 @@ mod tests {
             a.write(op * 7 + 1, 127);
         }
         a.write(0x28, 0x01);
-        write_be16(&mut a, 0x20, (3 << 11) | 1083); // op 1 freq: block 3 = 220 Hz
+        write_be16(&mut a, 0x20, (3 << 11) | 1083);
         a.write(KEYON_ADDR, 0xF0);
 
         assert_eq!(cycles_per_second(&mut a), 220, "per-op freq not honored");
@@ -622,12 +608,12 @@ mod tests {
     fn per_op_freq_also_drives_the_envelope_key_scaling() {
         fn drain_frames(a: &mut Apu, per_op: bool, chan: (u16, u8), op_freq: (u16, u8)) -> usize {
             for &o in &FM_OP_OFFSET {
-                a.write(o, 0x01); // DT 0, MUL 1
-                a.write(o + 1, 0); // TL 0
-                a.write(o + 2, 0xC0 | 0x1F); // KS 3 (full effect), AR 31
-                a.write(o + 5, 0x06); // SL 0, RR 6
+                a.write(o, 0x01);
+                a.write(o + 1, 0);
+                a.write(o + 2, 0xC0 | 0x1F);
+                a.write(o + 5, 0x06);
             }
-            a.write(0x1E, 7); // alg 7, FB 0
+            a.write(0x1E, 7);
             write_be16(a, 0x1C, ((chan.1 as u16) << 11) | chan.0);
 
             if per_op {
@@ -637,9 +623,9 @@ mod tests {
                 }
             }
 
-            a.write(KEYON_ADDR, 0xF0); // ch 0, all ops
+            a.write(KEYON_ADDR, 0xF0);
             run_frame(a, &[]);
-            a.write(KEYON_ADDR, 0x00); // key off
+            a.write(KEYON_ADDR, 0x00);
 
             let mut n = 0;
             while status(a) & 1 != 0 {
@@ -650,8 +636,8 @@ mod tests {
             n
         }
 
-        let high = (1000u16, 7u8); // high keycode: fast KS-boosted release
-        let low = (200u16, 0u8); // low keycode: slow release
+        let high = (1000u16, 7u8);
+        let low = (200u16, 0u8);
 
         let mut a = Apu::new();
         let per_op_arm = drain_frames(&mut a, true, low, high);
@@ -663,14 +649,8 @@ mod tests {
         let low_arm = drain_frames(&mut c, false, low, high);
 
         assert_eq!(per_op_arm, 1, "per-op freq's keycode drain");
-        assert_eq!(
-            high_arm, 1,
-            "high-pitch channel freq's keycode drain"
-        );
-        assert_eq!(
-            low_arm, 19,
-            "low-pitch channel freq's keycode drain"
-        );
+        assert_eq!(high_arm, 1, "high-pitch channel freq's keycode drain");
+        assert_eq!(low_arm, 19, "low-pitch channel freq's keycode drain");
         assert_eq!(
             per_op_arm, high_arm,
             "per-op freq must use the per-op keycode, not the channel's"
@@ -685,13 +665,12 @@ mod tests {
     fn hard_sync_locks_the_follower_to_the_leader_period() {
         let mut a = Apu::new();
 
-        fm_setup(&mut a, 0, 7, 1083, 4); // leader: 440 Hz
-        fm_setup(&mut a, 1, 7, 1200, 3); // follower alone would be ~244 Hz
-        a.write(0x40 + 0x28, 0x02); // ch 1: sync
+        fm_setup(&mut a, 0, 7, 1083, 4);
+        fm_setup(&mut a, 1, 7, 1200, 3);
+        a.write(0x40 + 0x28, 0x02);
         a.write(KEYON_ADDR, 0xF0);
         a.write(KEYON_ADDR, 0xF1);
 
-        // silence the leader's audio, keep its phase running: pan gates closed
         a.write(0x1F, 0x00);
 
         assert_eq!(
@@ -708,13 +687,12 @@ mod tests {
         fm_setup(&mut a, 0, 7, 1083, 4);
         fm_setup(&mut a, 1, 7, 1083, 5);
         run_frame(&mut a, &[]);
-        write_be16(&mut a, 0x40 + 0x1C, (4 << 11) | 1083); // retune ch 1 to match ch 0
-        a.write(0x40 + 0x28, 0x04); // ch 1: ring with ch 0
-        a.write(0x1F, 0x00); // ch 0 inaudible, still running
+        write_be16(&mut a, 0x40 + 0x1C, (4 << 11) | 1083);
+        a.write(0x40 + 0x28, 0x04);
+        a.write(0x1F, 0x00);
         a.write(KEYON_ADDR, 0xF0);
         a.write(KEYON_ADDR, 0xF1);
 
-        // sin×sin at the same frequency = DC; cos(2f): zero crossings double
         assert_eq!(
             cycles_per_second(&mut a),
             880,
@@ -728,7 +706,7 @@ mod tests {
             let mut a = Apu::new();
 
             fm_setup(&mut a, 0, 7, 1083, 4);
-            a.write(0x05, rr); // SL=0, RR=rr
+            a.write(0x05, rr);
             a.write(KEYON_ADDR, 0x10);
             run_frame(&mut a, &[]);
             a.write(KEYON_ADDR, 0x00);

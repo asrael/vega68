@@ -1,7 +1,6 @@
 #include "vega68_gfx.h"
 #include "vega68_math.h"
 
-// TPU RAM layout
 #define RING_OFF   0x000100
 #define RING_WORDS 2048
 #define CMAP_OFF   0x004000
@@ -89,7 +88,6 @@ static void build_tables(void) {
         v68_2d_palette(i, (u32)i << 16 | (u32)i << 8 | (u32)((i * 3) / 4 + 32));
 }
 
-// slope * FOCAL must fit i32; past +-48 the scissor discards it anyway
 static i32 clamp_slope(i32 r) {
     if (r > FX(48))
         return FX(48);

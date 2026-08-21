@@ -2,7 +2,6 @@ use super::{Apu, SAMPLE_RATE};
 
 pub(super) const PSG_CLOCK: f64 = 3_579_545.0;
 
-// ATTEN [3:0] -> linear gain, 2 dB/step; None at 15 (silent, gates the caller).
 fn atten_gain(reg: u8) -> Option<f64> {
     let atten = reg & 0x0F;
 
@@ -83,12 +82,11 @@ mod tests {
     fn square_frequency_matches_the_sn_formula() {
         let mut a = Apu::new();
 
-        // period 0x0FE = 254: 3579545/(32*254) = 440.4 Hz
         a.write(8 * 0x40, 0x00);
         a.write(8 * 0x40 + 1, 0xFE);
-        a.write(8 * 0x40 + 2, 0); // atten 0
+        a.write(8 * 0x40 + 2, 0);
 
-        assert_eq!(cycles_per_second(&mut a), 440, "rising edges in 1 s"); // 440.4 Hz truncates to 440 full cycles
+        assert_eq!(cycles_per_second(&mut a), 440, "rising edges in 1 s");
     }
 
     #[test]
@@ -102,11 +100,11 @@ mod tests {
             "atten 15 must gate the channel"
         );
 
-        a.write(8 * 0x40 + 2, 0); // atten 0, period stays 100 → audible
+        a.write(8 * 0x40 + 2, 0);
         run_frame(&mut a, &[]);
         assert!(a.frame.iter().any(|&s| s != 0));
 
-        a.write(8 * 0x40 + 1, 0); // period 0: DC high
+        a.write(8 * 0x40 + 1, 0);
         run_frame(&mut a, &[]);
         assert!(
             a.frame.iter().all(|&s| s > 0),
@@ -135,7 +133,7 @@ mod tests {
     fn lfsr_sequence_matches_the_sms_taps() {
         let mut a = Apu::new();
 
-        a.write(11 * 0x40, 0b100); // white, rate clk/512
+        a.write(11 * 0x40, 0b100);
         a.write(11 * 0x40 + 2, 0);
 
         let want = vec![0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 0];
@@ -150,7 +148,7 @@ mod tests {
     fn periodic_noise_repeats_every_16_shifts() {
         let mut a = Apu::new();
 
-        a.write(11 * 0x40, 0b000); // periodic, clk/512
+        a.write(11 * 0x40, 0b000);
         a.write(11 * 0x40 + 2, 0);
         run_frame(&mut a, &[]);
 
@@ -167,9 +165,9 @@ mod tests {
     fn noise_rate_3_with_ch10_period_0_freezes_lfsr() {
         let mut a = Apu::new();
 
-        a.write(11 * 0x40, 0b011); // rate 3 (ch 10 tone period), white
-        a.write(11 * 0x40 + 2, 0); // atten 0 (full volume)
-        a.write(10 * 0x40, 0); // ch 10 period 0 (DC)
+        a.write(11 * 0x40, 0b011);
+        a.write(11 * 0x40 + 2, 0);
+        a.write(10 * 0x40, 0);
         a.write(10 * 0x40 + 1, 0);
 
         run_frame(&mut a, &[]);

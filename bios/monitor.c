@@ -69,7 +69,7 @@ static void __attribute__((noreturn)) monitor_loop(void) {
     }
 }
 
-u32 v68_fault_regs[17]; // d0-d7, a0-a7, and the sp the exception frame is at
+u32 v68_fault_regs[17];
 u32 *const v68_monitor_sp = monitor_stack + V68_LEN(monitor_stack);
 
 void v68_fault_dump(void) {
@@ -79,7 +79,7 @@ void v68_fault_dump(void) {
     puthex(frame[0]);
     v68_puts(" pc=");
     puthex((u32)frame[1] << 16 | frame[2]);
-    v68_puts(" fv="); // format/vector word, raw: no per-format decoding
+    v68_puts(" fv=");
     puthex(frame[3]);
 
     for (usize i = 0; i < V68_LEN(v68_fault_regs) - 1; i++) {

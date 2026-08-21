@@ -2,7 +2,6 @@ use vega68::tpu::{self, Tpu};
 use vega68::{bus, vdp};
 
 use std::collections::BTreeMap;
-use std::path::Path;
 
 fn header_const(header: &str, name: &str) -> u32 {
     let line = header
@@ -27,8 +26,6 @@ fn header_const(header: &str, name: &str) -> u32 {
         .product()
 }
 
-/// A `const NAME: <ty> = <literal>;` row in a Rust source, for pinning header
-/// constants against emulator internals that have no `pub` surface.
 fn rust_const(src: &str, name: &str) -> u32 {
     let line = src
         .lines()
@@ -50,9 +47,7 @@ fn rust_const(src: &str, name: &str) -> u32 {
 }
 
 fn repo_file(name: &str) -> String {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../..")
-        .join(name);
+    let path = xtask::repo_root().unwrap().join(name);
 
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
@@ -87,12 +82,6 @@ fn header_matches_emulator_abi() {
     }
 }
 
-/// `pub const NAME: u32 = 0xFF00_XXXX;` rows in `bus.rs`, keyed by name.
-/// `MMIO_BASE` itself is the region base, not a register, so it is excluded.
-/// `AUDIO_*` range markers are excluded: the audio block is byte-granular
-/// and indexed by the function-like `V68_AUDIO_CH(n)` macro, not the flat
-/// one-name-one-address shape this test diffs; its devkit macros are
-/// checked by the `audio` guest fixture instead (`tests/bios.rs`).
 fn bus_mmio_consts(bus_src: &str) -> BTreeMap<String, u32> {
     bus_src
         .lines()
@@ -108,9 +97,6 @@ fn bus_mmio_consts(bus_src: &str) -> BTreeMap<String, u32> {
             }
 
             let Some(hex) = value.strip_prefix("0x") else {
-                // A register expressed as anything other than a bare 0x
-                // literal (e.g. `MMIO_BASE + 0x18`) would otherwise be
-                // silently skipped instead of checked against the header.
                 assert!(
                     !value.contains("MMIO_BASE"),
                     "bus.rs: {name}: MMIO const {value:?} is not a bare 0x literal; \
@@ -136,7 +122,6 @@ fn header_mmio_defines(header: &str) -> BTreeMap<String, u32> {
             let rest = l.trim().strip_prefix("#define V68_")?;
             let (name, rest) = rest.split_once(char::is_whitespace)?;
 
-            // Mirrors bus_mmio_consts's AUDIO_* exclusion above.
             if name.starts_with("AUDIO_") {
                 return None;
             }
@@ -266,20 +251,11 @@ fn tpu_command_encoding_matches_emulator_abi() {
     );
 }
 
-/// The state-block field offsets are positional reads in `read_state_block`,
-/// with no Rust consts to diff against. The ABI is the offset table in
-/// registers.md Rev 4 (0/4/8/12/16/18), expressed C-side as the V68TpuState
-/// struct in vega68_hw.h; this drives a real FILL through a block laid out
-/// at those literal offsets, so a drifted emulator read leaves a bad ring or
-/// a zero-width target and nothing gets painted.
 #[test]
 fn tpu_state_block_offsets_match_emulator_abi() {
     const COLOR: u32 = 0x1000;
     const RING: u32 = 0x100;
     const Z: u32 = 0x2000;
-    // Non-square so a WIDTH/HEIGHT define transposition changes the row
-    // stride and moves where the FILL below lands, instead of being masked
-    // by width == height.
     const WIDTH: u32 = 16;
     const HEIGHT: u32 = 8;
 
@@ -297,8 +273,6 @@ fn tpu_state_block_offsets_match_emulator_abi() {
     put(16, &(WIDTH as u16).to_be_bytes());
     put(18, &(HEIGHT as u16).to_be_bytes());
 
-    // FILL (1,1)-(3,3), color 7, z 0xBEEF -- an off-by-one in the width
-    // offset would also move the pixel this lands on.
     for (i, w) in [0x0200_0003u32, 0x0001_0001, 0x0003_0003, 7, 0xBEEF]
         .into_iter()
         .enumerate()
@@ -332,7 +306,7 @@ fn vdp_mode_bits_match_emulator_abi() {
     let mut mem = vec![0u8; bus::MEM_END as usize];
 
     mem[bus::PALETTE_BASE as usize + 4..][..4].copy_from_slice(&0x00AB_CDEFu32.to_be_bytes());
-    mem[bus::TPU_RAM_BASE as usize] = 1; // fb_base is 0: framebuffer pixel (0,0)
+    mem[bus::TPU_RAM_BASE as usize] = 1;
 
     mem[bus::VDP_MODE as usize..][..2].copy_from_slice(&hires.to_be_bytes());
     assert_eq!(

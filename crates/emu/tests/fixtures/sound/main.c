@@ -8,13 +8,9 @@ static const V68Patch ping = {
     .fb_alg = 0x07,
     .echo = 1,
 };
-// fixture-local patch via patch_ptr: preset tuning must never move this golden
 
-// bar 1: hold across barline, rest, hold extending THE REST (pins semantic: a hold on a
-// rest keeps it silent), then a plain note
 static const char *lead[] = { "a4 [c5 e5] ~ g4@1", "- ~ - e4" };
 static const char *bass[] = { "a2 ~ a2 ~", "e2 - ~ a2" };
-// PSG period must stay <= 1023: a2/b2 are the low end of what octave 2 allows
 static const char *square[] = { "a2 c3 e3 a2", "b2 d3 f3 a2" };
 static const char *perc[] = { "k h s h", "k h s h" };
 static const V68Track tracks[] = {
@@ -36,7 +32,7 @@ void main(void) {
     }
 
     for (i32 i = 0; i < 48; i++)
-        v68_wait_vblank(); // two bars exactly
+        v68_wait_vblank();
 
     v68_puts("ok\n");
     *V68_DEBUG_PUTC = 0x04;

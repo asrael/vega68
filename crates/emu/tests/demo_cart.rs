@@ -5,9 +5,9 @@ use vega68::System;
 use vega68::bus::{PAD_A, PAD_RIGHT};
 use vega68::vdp::{HEIGHT, WIDTH};
 
-const BACKDROP: u32 = 0x0010_2040; // palette 0
+const BACKDROP: u32 = 0x0010_2040;
 const BACKDROP_PX: usize = 10 * WIDTH + 10;
-const CHECKER: u32 = 0x003A_3050; // palette 1
+const CHECKER: u32 = 0x003A_3050;
 const CHECKER_PX: usize = 10 * WIDTH + 14;
 const DIM_FRAMES: u8 = 4;
 const FADE_CAP: usize = 34;
@@ -16,8 +16,8 @@ const HOME_X: u16 = 152;
 const HOME_Y: u16 = 82;
 const MOVE_FRAMES: u16 = 5;
 const SETUP_CAP: usize = 4;
-const SPRITE_BODY: u32 = 0x00FF_8000; // palette 2
-const SPRITE_EDGE: u32 = 0x00FF_FFFF; // palette 3
+const SPRITE_BODY: u32 = 0x00FF_8000;
+const SPRITE_EDGE: u32 = 0x00FF_FFFF;
 
 fn body_px(frame: &[u32], x: u16, y: u16) -> u32 {
     frame[(y as usize + 8) * WIDTH + x as usize + 8]

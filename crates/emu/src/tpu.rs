@@ -1,43 +1,3 @@
-//! TPU state block (plain memory at TPU_RAM_BASE, big-endian):
-//!   +0  ring_base   u32  byte offset into TPU RAM, 4-aligned
-//!   +4  ring_words  u32  ring length in u32 words; MUST be a power of two
-//!                        <= 0x10000, else the ring is invalid and drains
-//!                        nothing (head snaps to tail)
-//!   +8  color_base  u32  byte offset, render target indices, row-major
-//!   +12 z_base      u32  byte offset, u16 BE per pixel
-//!   +16 width       u16  render target / scissor width
-//!   +18 height      u16  render target / scissor height
-//!
-//! `head`/`tail` are ring sequence counters in word units, wrapping
-//! naturally at 2^16 (not bounded ring offsets); the ring index is
-//! `counter % ring_words`. The power-of-two requirement is what makes
-//! that modulus compose correctly with the u16 wraparound.
-//!
-//! TRI (25 words):  w0 [31:24]=0x01 [15:8]=lod_bias s4.4 [7:0]=flags
-//!                     (bit0 BLEND, bit1 ZGREATER, bit2 ZTEST_OFF,
-//!                      bit3 ZWRITE_OFF)
-//!                  w1 [31:12]=tex_base>>3 [11:8]=log2w [7:4]=log2h
-//!                     [3:0]=mip count
-//!                  w2 colormap byte offset (256-aligned)
-//!                  w3 blend table byte offset
-//!                  then 3 vertices x 7 words: x s16.16 | y s16.16 |
-//!                  z u16.16 | uq s16.16 | vq s16.16 | q u16.16 | shade s16.16
-//! FILL (5 words):  w0 [31:24]=0x02 [7:0]=flags (bit0 COLOR, bit1 Z)
-//!                  w1 x0<<16|y0  w2 x1<<16|y1 (half-open)
-//!                  w3 [7:0]=color index  w4 [15:0]=z value
-//! Unknown opcode: head skips 1 word. Budget is checked between commands --
-//! a command that starts always completes and any overshoot becomes deficit.
-//!
-//! Rasterization: positions snap 16.16 -> 28.4 (>>12), edge functions are
-//! evaluated at pixel centres in i64, winding is normalised (zero area skips
-//! the triangle) and E == 0 counts only on top-left edges. z, shade and uq/vq/q
-//! interpolate linearly in screen space from those same edge values. u and v
-//! are (uq << 16) / q, divided exactly at every 8th pixel of a row's covered
-//! run and at the run's end and linear in between; that subspan's own uv step
-//! is the s4.4 LOD, which w0's bias shifts and the Bayer matrix dithers
-//! between two mip levels. shade is Bayer-dithered too, then the pixel is
-//! colormap[shade * 256 + texel], and under BLEND blend[dst * 256 + that].
-
 use crate::bus::TPU_RAM_BASE;
 
 pub const PIXEL_BUDGET: u32 = 833_333;
@@ -64,7 +24,7 @@ pub fn run(state: &mut Tpu, mem: &mut [u8]) {
         return;
     }
 
-    let mut left = state.tail.wrapping_sub(state.head); // words pending
+    let mut left = state.tail.wrapping_sub(state.head);
     while left > 0 && state.budget > 0 {
         let word0 = ring_word(mem, &block, state.head, 0);
         let opcode = (word0 >> 24) as u8;
@@ -78,7 +38,7 @@ pub fn run(state: &mut Tpu, mem: &mut [u8]) {
         charge(state, cost);
 
         if words > left {
-            state.head = state.tail; // misaligned/corrupt: stop rather than overrun
+            state.head = state.tail;
             break;
         }
         left -= words;
@@ -188,8 +148,6 @@ fn exec_tri(mem: &mut [u8], block: &StateBlock, head: u16) -> u32 {
         vs.swap(1, 2);
     }
 
-    // Swapping two vertices negates the signed area, so the normalised
-    // triangle's 2*area -- the barycentric denominator -- is |area|.
     let denom = area.abs();
     let tl = [
         top_left(&vs[1], &vs[2]),
@@ -222,9 +180,6 @@ fn exec_tri(mem: &mut [u8], block: &StateBlock, head: u16) -> u32 {
         };
         let mut xa = first;
 
-        // The convex triangle covers one run per row, so u and v are divided
-        // exactly at every 8th pixel of it plus at the run's end and linearly
-        // interpolated in between; the subspan's own uv step picks the mip.
         while xa <= last {
             let xb = (xa + 8).min(last + 1);
             let span = (xb - xa) as i64;
@@ -295,9 +250,6 @@ fn interp(e: &[i64; 3], a: &[i64; 3], denom: i64) -> i64 {
     n.div_euclid(denom as i128) as i64
 }
 
-// s4.4 log2 of a 16.16 step: the msb index k puts the integer part at k - 16
-// and the four bits under the msb are the fraction. A zero step has no log2,
-// and the bias cannot pull the level below 0.
 fn lod_44(step: u64, bias: i64) -> i64 {
     if step == 0 {
         return 0;
@@ -371,8 +323,6 @@ fn row_run(vs: &[Vertex; 3], tl: &[bool; 3], x0: i32, x1: i32, cy: i32) -> Optio
     Some((first, (first..=x1).rev().find(|&px| hit(px))?))
 }
 
-// Level n is w>>n by h>>n (never below 1) laid down after every smaller n, and
-// u/v wrap by masking -- which is also what makes a negative coordinate wrap.
 fn texel(mem: &[u8], tex: &Texture, level: usize, u: i64, v: i64) -> u8 {
     let n = level as u32;
     let mut off = tex.base;
@@ -390,9 +340,6 @@ fn texel(mem: &[u8], tex: &Texture, level: usize, u: i64, v: i64) -> u8 {
     )
 }
 
-// Interior is at E > 0, which puts an ascending edge on the triangle's left
-// and a dx > 0 horizontal edge on its top -- those two keep their E == 0
-// fragments so a shared edge lands in exactly one of the two triangles.
 fn top_left(a: &Vertex, b: &Vertex) -> bool {
     b.y < a.y || (b.y == a.y && b.x > a.x)
 }
@@ -411,9 +358,6 @@ fn uv_at(vs: &[Vertex; 3], uvq: &[[i64; 3]; 3], denom: i64, px: i32, cy: i32) ->
     )
 }
 
-// Required so `counter % ring_words` composes with the u16 counter's own
-// wraparound at 2^16 -- anything else (zero, non-power-of-two) desyncs the
-// ring index from the raw counter once the counter has wrapped.
 fn valid_ring(ring_words: u32) -> bool {
     ring_words != 0 && ring_words <= 0x1_0000 && ring_words.is_power_of_two()
 }
@@ -458,8 +402,6 @@ struct Texture {
     log2w: u32,
 }
 
-// x, y in 28.4; z u16.16; shade s16.16; uq/vq s16.16 and q u16.16, all three
-// premultiplied by the CPU so they interpolate linearly in screen space.
 struct Vertex {
     q: u32,
     shade: i32,
@@ -511,14 +453,10 @@ mod tests {
     const TEX: u32 = 0x3000;
     const Z: u32 = 0x2000;
 
-    /// 1x1 texture at TEX: base>>3 in [31:12], log2w = log2h = 0, one mip.
     const TEX_DESC: u32 = (TEX >> 3) << 12 | 0x001;
-    /// 8x8 at TEX with a full four-level mip chain.
     const TEX_MIP: u32 = (TEX >> 3) << 12 | 0x334;
-    /// 32x1 at TEX, one mip.
     const TEX_WIDE: u32 = (TEX >> 3) << 12 | 0x501;
 
-    /// uq = vq = 0, q = 1.0: every pixel lands on texel (0,0).
     const UVQ_1: [[i32; 3]; 3] = [[0, 0, 0x0001_0000]; 3];
 
     fn fill(flags: u8, x0: u16, y0: u16, x1: u16, y1: u16, color: u8, z: u16) -> [u32; 5] {
@@ -531,11 +469,6 @@ mod tests {
         ]
     }
 
-    // TPU RAM image: state block at 0, ring at RING (capacity ring_words,
-    // caller's job to keep it a power of two), color target at COLOR, z
-    // target at Z, texture at TEX, 64-row colormap at CMAP, 64K blend table
-    // at BLEND, a 16x16 render target -- large enough for every test fixture
-    // below plus TPU_RAM_BASE's own offset into the fake bus.
     fn ring_with(ring_words: u32, cmds: &[u32]) -> Vec<u8> {
         let mut m = vec![0u8; TPU_RAM_BASE as usize + 0x2_0000];
 
@@ -553,15 +486,10 @@ mod tests {
         m
     }
 
-    // A TRI command. Each vertex is (x px, y px, z, colormap shade) in whole
-    // units; the builder scales them into the fixed-point words. uq/vq are 0
-    // and q is 1.0, so the perspective divide lands on texel (0,0).
     fn tri(flags: u8, vs: [(i32, i32, u16, i32); 3]) -> Vec<u32> {
         tri_uv(flags, 0, TEX_DESC, 0, vs, UVQ_1)
     }
 
-    // tri with the texture descriptor, the s4.4 lod bias, the blend table
-    // offset and per-vertex [uq, vq, q] (raw fixed-point words) spelled out.
     fn tri_uv(
         flags: u8,
         bias: i8,
@@ -588,9 +516,6 @@ mod tests {
         w
     }
 
-    // ring_with plus a texture whose single texel is 1 and a colormap where
-    // row r maps texel 1 to r + 1 -- a painted pixel names the row that lit
-    // it and 0 still means untouched.
     fn tri_ram(ring_words: u32, cmds: &[u32]) -> Vec<u8> {
         let mut m = ring_with(ring_words, cmds);
 
@@ -616,9 +541,6 @@ mod tests {
         m[a..a + 4].copy_from_slice(&v.to_be_bytes());
     }
 
-    // Writes word `raw_index` of the ring's own unbounded sequence-counter
-    // domain -- mirrors what a real guest does when it computes the wrapped
-    // slot for a word it wants to queue.
     fn put_ring_word(m: &mut [u8], ring_words: u32, raw_index: u32, w: u32) {
         let idx = raw_index % ring_words;
         put32(m, RING + idx * 4, w);
@@ -663,7 +585,7 @@ mod tests {
 
     #[test]
     fn fill_costs_quarter_pixels_rounded_up() {
-        let cmd = fill(FILL_COLOR, 0, 0, 3, 3, 1, 0); // 3x3 = 9 px
+        let cmd = fill(FILL_COLOR, 0, 0, 3, 3, 1, 0);
         let mut mem = ring_with(8, &cmd);
         let mut t = Tpu::new();
         t.tail = 5;
@@ -676,7 +598,7 @@ mod tests {
     #[test]
     fn ring_words_that_is_not_a_power_of_two_drains_nothing() {
         let cmd = fill(FILL_COLOR, 0, 0, 3, 3, 7, 0);
-        let mut mem = ring_with(10, &cmd); // 10 is a valid word count, not a valid ring size
+        let mut mem = ring_with(10, &cmd);
         let mut t = Tpu::new();
         t.tail = 5;
 
@@ -695,7 +617,7 @@ mod tests {
 
     #[test]
     fn unknown_opcode_advances_head_by_one_word_and_executes_nothing() {
-        let mut mem = ring_with(8, &[0x00FF_FFFF]); // opcode byte 0x00: not FILL/TRI
+        let mut mem = ring_with(8, &[0x00FF_FFFF]);
         let mut t = Tpu::new();
         t.tail = 1;
 
@@ -709,25 +631,14 @@ mod tests {
         assert_eq!(color_at(&mem, 0, 0), 0, "unknown opcode must not paint");
     }
 
-    // Regression for a drain loop that spun forever on a misaligned tail.
-    // ring_words = 8; indices 0-5 are zero-initialised (unknown opcode, cost
-    // 0, step 1 word); index 6 holds a zero-coverage FILL (cost 0, step 5
-    // words). Under the OLD `while head != tail` loop this walks head's
-    // residue mod 8 as 0,1,2,3,4,5,6,(+5)->3,4,5,6,(+5)->3,... forever --
-    // residue 7 (tail's) is never reached, cost is always 0 so budget never
-    // runs out, and head grows without bound while never equalling tail. The
-    // fixed bounded-by-pending-words loop instead detects, at head=6, that
-    // the FILL's 5 words exceed the words actually left before tail and
-    // snaps head to tail. This case would hang the pre-fix code indefinitely
-    // (verified by construction, not executed) -- it must terminate here.
     #[test]
     fn misaligned_tail_terminates_instead_of_spinning() {
         const RING_WORDS: u32 = 8;
         let mut mem = ring_with(RING_WORDS, &[]);
-        put_ring_word(&mut mem, RING_WORDS, 6, 0x0200_0000); // FILL, zero coverage
+        put_ring_word(&mut mem, RING_WORDS, 6, 0x0200_0000);
 
         let mut t = Tpu::new();
-        t.tail = 7; // not a multiple of any command's word count
+        t.tail = 7;
 
         run(&mut t, &mut mem);
 
@@ -740,11 +651,9 @@ mod tests {
     #[test]
     fn fill_command_words_straddling_the_ring_wrap_execute_correctly() {
         const RING_WORDS: u32 = 8;
-        let cmd = fill(FILL_COLOR, 0, 0, 2, 2, 6, 0); // 2x2 = 4 px, cost 1
+        let cmd = fill(FILL_COLOR, 0, 0, 2, 2, 6, 0);
         let mut mem = ring_with(RING_WORDS, &[]);
 
-        // head starts at 6: the command's 5 words land at raw indices
-        // 6,7,8,9,10 -> ring indices 6,7,0,1,2, straddling the wrap.
         for (j, &w) in cmd.iter().enumerate() {
             put_ring_word(&mut mem, RING_WORDS, 6 + j as u32, w);
         }
@@ -772,11 +681,6 @@ mod tests {
 
     #[test]
     fn drain_survives_multiple_ring_wraps_without_rerunning_stale_commands() {
-        // ring_words = 8, each FILL is 5 words: four sequential tail writes
-        // (20 words total) push the ring index past two full wraps. Each
-        // command paints a distinct color at the same pixel, so if a stale
-        // (already-executed) command ever re-ran, the final color would not
-        // match the last tail write's.
         const RING_WORDS: u32 = 8;
         let mut mem = ring_with(RING_WORDS, &[]);
         let mut t = Tpu::new();
@@ -806,13 +710,13 @@ mod tests {
 
     #[test]
     fn budget_lets_a_command_finish_then_stops_and_carries() {
-        let cmd1 = fill(FILL_COLOR, 0, 0, 16, 16, 5, 0); // full target: 256 px, cost 64
-        let cmd2 = fill(FILL_COLOR, 0, 0, 2, 2, 9, 0); // 4 px, cost 1
+        let cmd1 = fill(FILL_COLOR, 0, 0, 16, 16, 5, 0);
+        let cmd2 = fill(FILL_COLOR, 0, 0, 2, 2, 9, 0);
         let cmds: Vec<u32> = cmd1.into_iter().chain(cmd2).collect();
         let mut mem = ring_with(16, &cmds);
         let mut t = Tpu::new();
         t.tail = 10;
-        t.budget = 10; // forces cmd1 (cost 64) to overshoot
+        t.budget = 10;
 
         run(&mut t, &mut mem);
 
@@ -906,8 +810,6 @@ mod tests {
 
     #[test]
     fn shared_edge_paints_every_pixel_exactly_once() {
-        // A 4x4 quad split on the (0,0)-(4,4) diagonal. Row 0 -> color 1 for
-        // the upper-right half, row 1 -> color 2 for the lower-left half.
         let mut cmds = tri(TRI_ZTEST_OFF, [(0, 0, 0, 0), (4, 0, 0, 0), (4, 4, 0, 0)]);
         cmds.extend(tri(
             TRI_ZTEST_OFF,
@@ -938,10 +840,6 @@ mod tests {
 
     #[test]
     fn fragments_outside_the_scissor_are_not_fragments() {
-        // The six-pixel triangle shifted to x=14 on a 16-wide target: its rows
-        // cover x=14,15,16 / 14,15 / 14, so the one fragment at x=16 falls off
-        // the right edge. Were it kept, it would alias onto row 1 of the
-        // render target.
         let cmd = tri(TRI_ZTEST_OFF, [(14, 0, 0, 0), (18, 0, 0, 0), (14, 4, 0, 0)]);
         let mut mem = tri_ram(32, &cmd);
         let mut t = Tpu::new();
@@ -967,7 +865,6 @@ mod tests {
 
     #[test]
     fn z_less_rejects_and_zgreater_flips() {
-        // z-buffer primed to 0x0100, then four passes over the same triangle.
         let verts = |z, shade| [(0, 0, z, shade), (4, 0, z, shade), (0, 4, z, shade)];
         let mut cmds = fill(FILL_Z, 0, 0, 16, 16, 0, 0x0100).to_vec();
         cmds.extend(tri(0, verts(0x0200, 4)));
@@ -977,7 +874,7 @@ mod tests {
         let mut mem = tri_ram(128, &cmds);
         let mut t = Tpu::new();
 
-        t.tail = 30; // FILL + pass 1
+        t.tail = 30;
         run(&mut t, &mut mem);
         assert_eq!(
             color_at(&mem, 0, 0),
@@ -991,7 +888,7 @@ mod tests {
         );
         assert_eq!(t.pixels, 70, "64 for the FILL plus 6 z-failed fragments");
 
-        t.tail = 55; // pass 2: ZGREATER
+        t.tail = 55;
         run(&mut t, &mut mem);
         assert_eq!(
             color_at(&mem, 0, 0),
@@ -1005,7 +902,7 @@ mod tests {
         );
         assert_eq!(t.pixels, 76, "six more fragments");
 
-        t.tail = 80; // pass 3: equal z
+        t.tail = 80;
         run(&mut t, &mut mem);
         assert_eq!(
             color_at(&mem, 0, 0),
@@ -1014,7 +911,7 @@ mod tests {
         );
         assert_eq!(t.pixels, 82, "a z-failed fragment still costs one pixel");
 
-        t.tail = 105; // pass 4: ZGREATER | ZWRITE_OFF
+        t.tail = 105;
         run(&mut t, &mut mem);
         assert_eq!(color_at(&mem, 0, 0), 31, "pass 4 passes the depth test");
         assert_eq!(
@@ -1026,22 +923,11 @@ mod tests {
 
     #[test]
     fn shades_interpolate_and_dither_between_colormap_rows() {
-        // Rows 0 / 32 / 63 at (0,0) / (4,0) / (0,4). With E1 = 64*cx and
-        // E2 = 64*cy over 2*area = 4096, the interpolated shade at a pixel
-        // centre (cx,cy) in 28.4 is exactly cx*32768 + cy*64512 (16.16):
-        //
-        //   px py |  cx cy | shade 16.16 | int frac  | bayer<<12 | row' | color
-        //    0  0 |   8  8 |    778240 |  11 57344 |         0 |   12 |    13
-        //    1  0 |  24  8 |   1302528 |  19 57344 |     32768 |   20 |    21
-        //    2  0 |  40  8 |   1826816 |  27 57344 |      8192 |   28 |    29
-        //    0  1 |   8 24 |   1810432 |  27 40960 |     49152 |   27 |    28
-        //    1  1 |  24 24 |   2334720 |  35 40960 |     16384 |   36 |    37
-        //    0  2 |   8 40 |   2842624 |  43 24576 |     12288 |   44 |    45
         const WANT: [(u32, u32, u8); 6] = [
             (0, 0, 13),
             (1, 0, 21),
             (2, 0, 29),
-            (0, 1, 28), // the only centre whose fraction loses to its threshold
+            (0, 1, 28),
             (1, 1, 37),
             (0, 2, 45),
         ];
@@ -1060,17 +946,6 @@ mod tests {
 
     #[test]
     fn z_interpolates_across_the_vertex_gradient() {
-        // z 0 / 4096 / 8192 at (0,0) / (4,0) / (0,4). Screen-space linear
-        // interpolation over 2*area = 4096 puts the z at a pixel centre
-        // (cx,cy) in 28.4 at 4096*(cx/64) + 8192*(cy/64) = 64*cx + 128*cy:
-        //
-        //   px py |  cx cy |    z
-        //    0  0 |   8  8 | 1536
-        //    1  0 |  24  8 | 2560
-        //    2  0 |  40  8 | 3584
-        //    0  1 |   8 24 | 3584
-        //    1  1 |  24 24 | 4608
-        //    0  2 |   8 40 | 5632
         const WANT: [(u32, u32, u16); 6] = [
             (0, 0, 1536),
             (1, 0, 2560),
@@ -1097,19 +972,6 @@ mod tests {
 
     #[test]
     fn perspective_divide_is_exact_at_subspan_boundaries() {
-        // A(0,0) B(20,0) C(0,20) with q = 0.96875 at A and C and 2.21875 at B:
-        // the interpolated q at a row-0 pixel centre is exactly 65536 + 4096*x,
-        // so the subspan anchors are q = 1.0 at x=0, 1.5 at x=8 and 2.0 at the
-        // x=16 span end -- a 2:1 ratio. uq is a constant 16.0, so the exact
-        // (uq<<16)/q is 1048576 (16.0) at x=0, 68719476736/98304 = 699050
-        // (10.66) at x=8 and 524288 (8.0) at x=16; pixels inside a subspan are
-        // linear between its two anchors:
-        //
-        //   x       0  1  2  3  4  5  6  7 | 8  9 10 11 12 13 14 15
-        //   u >> 16 16 15 14 13 13 12 11 11|10 10  9  9  9  8  8  8
-        //
-        // Dividing at every pixel would put x=4 on texel 12, not 13; skipping
-        // the divide would hold all sixteen on texel 16.
         const UQ: i32 = 16 << 16;
         const WANT: [u8; 16] = [16, 15, 14, 13, 13, 12, 11, 11, 10, 10, 9, 9, 9, 8, 8, 8];
 
@@ -1123,8 +985,6 @@ mod tests {
         );
         let mut mem = ring_with(32, &cmd);
 
-        // texel i = i, colormap row 0 the identity: a pixel's colour names the
-        // texel its u landed on.
         for i in 0..32u32 {
             put8(&mut mem, TEX + i, i as u8);
             put8(&mut mem, CMAP + i, i as u8);
@@ -1146,16 +1006,7 @@ mod tests {
 
     #[test]
     fn mip_level_follows_uv_step_and_lod_bias() {
-        // The same A(0,0) B(20,0) C(0,20) with q = 1.0 everywhere, so u is uq
-        // exactly. uq_B = 80.0 over 20 px is 4 texels per pixel: u(x) =
-        // 262144*x + 131072 and both subspans step by 4.0 = 2^18, so the msb
-        // index is 18 and lod_44 = (18-16)<<4 = 32 -- level 2, fraction 0. A
-        // +1.0 bias (0x10) makes it 48 -> level 3. uq_B = 120.0 steps 6.0:
-        // msb 18 again, the four bits under it are 8, so lod_44 = 40 -- level 2
-        // with fraction 8, which the Bayer row [0,8,2,10] dithers up to level 3
-        // on x%4 = 0 and 2 only.
         const VS: [(i32, i32, u16, i32); 3] = [(0, 0, 0, 0), (20, 0, 0, 0), (0, 20, 0, 0)];
-        // (byte offset, byte count, tag index) per level of an 8x8 chain.
         const MIPS: [(u32, u32, u8); 4] = [(0, 64, 1), (64, 16, 2), (80, 4, 3), (84, 1, 4)];
 
         let uvq = |uq: i32| {
@@ -1211,13 +1062,6 @@ mod tests {
 
     #[test]
     fn blend_flag_routes_through_the_table() {
-        // blend[dst*256 + src] = min(dst + 2*src, 255): the doubled source
-        // makes the operand order observable, the clamp makes saturation
-        // observable. Colours are tri_ram's (row r -> r+1) with row 63
-        // overridden to 250 for the saturating pair.
-        //
-        //   (0,0),(1,0),(0,1): dst 10, src 20 -> 50
-        //   (8,0),(9,0),(8,1): dst 250, src 20 -> 290 -> 255
         let mut cmds = tri(
             TRI_ZTEST_OFF,
             [(0, 0, 0x0100, 9), (4, 0, 0x0100, 9), (0, 4, 0x0100, 9)],
@@ -1290,7 +1134,6 @@ mod tests {
 
     #[test]
     fn row_clamps_to_the_colormap_range() {
-        // Row 100 saturates to 63 (colour 64) and row -5 to 0 (colour 1).
         let mut cmds = tri(
             TRI_ZTEST_OFF,
             [(0, 0, 0, 100), (4, 0, 0, 100), (0, 4, 0, 100)],

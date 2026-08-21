@@ -9,7 +9,7 @@ void main(void) {
     v68_vblank_enable();
     v68_puts("pre\n");
 
-    __asm__ volatile(".word 0x4afc"); // ILLEGAL: vector 4
+    __asm__ volatile(".word 0x4afc");
 
     v68_puts("post\n");
 }

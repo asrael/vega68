@@ -47,7 +47,7 @@ impl Apu {
             if ctrl & 0x01 != 0 {
                 new_pos = loop_off as f64 + (new_pos - len as f64);
                 if new_pos >= len as f64 {
-                    new_pos = loop_off as f64; // pathological loop_off >= len: don't run away
+                    new_pos = loop_off as f64;
                 }
             } else {
                 self.pcm[i].playing = false;
@@ -58,15 +58,14 @@ impl Apu {
         sample
     }
 
-    // Nonzero op mask starts from START, zero stops.
     pub(super) fn pcm_key(&mut self, ch: usize, mask: u8) {
-            let pcm = &mut self.pcm[ch - 12];
+        let pcm = &mut self.pcm[ch - 12];
 
-            pcm.playing = mask & 0xF0 != 0;
+        pcm.playing = mask & 0xF0 != 0;
 
-            if pcm.playing {
-                pcm.pos = 0.0;
-            }
+        if pcm.playing {
+            pcm.pos = 0.0;
+        }
     }
 }
 
@@ -78,11 +77,11 @@ mod tests {
     #[test]
     fn pcm_plays_signed_bytes_at_the_programmed_rate_and_stops() {
         let mut mem = vec![0u8; 0x100];
-        mem[0x10..0x20].fill(0x7F); // 16 full-scale samples
+        mem[0x10..0x20].fill(0x7F);
 
         let mut a = Apu::new();
         pcm_setup(&mut a, 0x10, 16, 48000);
-        a.write(KEYON_ADDR, 0x1C); // any nonzero op mask, ch 12
+        a.write(KEYON_ADDR, 0x1C);
 
         a.run_line(&mem, 0);
         assert_eq!(
@@ -108,7 +107,7 @@ mod tests {
 
         let mut a = Apu::new();
         pcm_setup(&mut a, 0, 8, 8000);
-        a.write(12 * 0x40 + 0x10, 0x01); // loop enable, LOOP = 0
+        a.write(12 * 0x40 + 0x10, 0x01);
         a.write(KEYON_ADDR, 0x1C);
 
         for _ in 0..10 {
@@ -117,7 +116,7 @@ mod tests {
 
         assert_eq!(status(&a) & (1 << 12), 1 << 12, "looping channel stopped");
 
-        a.write(KEYON_ADDR, 0x0C); // zero mask: stop
+        a.write(KEYON_ADDR, 0x0C);
         run_frame(&mut a, &mem);
         assert_eq!(status(&a) & (1 << 12), 0);
     }
@@ -128,13 +127,11 @@ mod tests {
         mem[0..8].fill(0x7F);
 
         let mut a = Apu::new();
-        pcm_setup(&mut a, 0, 8, 40_000); // step = 40000/48000 = 5/6: does not divide 8 evenly
-        a.write(12 * 0x40 + 0x08 + 3, 2); // LOOP = 2
-        a.write(12 * 0x40 + 0x10, 0x01); // loop enable
+        pcm_setup(&mut a, 0, 8, 40_000);
+        a.write(12 * 0x40 + 0x08 + 3, 2);
+        a.write(12 * 0x40 + 0x10, 0x01);
         a.write(KEYON_ADDR, 0x1C);
 
-        // pos crosses LEN=8 on the 10th sample (9*5/6=7.5,
-        // +5/6=8.3333 >= 8), wrapping to LOOP(2) + (8.3333-8) = 2.3333...
         for _ in 0..10 {
             a.pcm(12, &mem);
         }
@@ -151,9 +148,9 @@ mod tests {
         mem[0..8].fill(0x7F);
 
         let mut a = Apu::new();
-        pcm_setup(&mut a, 0, 8, 48_000); // step = 1.0/sample
-        a.write(12 * 0x40 + 0x08 + 3, 20); // LOOP = 20, past LEN = 8: pathological
-        a.write(12 * 0x40 + 0x10, 0x01); // loop enable
+        pcm_setup(&mut a, 0, 8, 48_000);
+        a.write(12 * 0x40 + 0x08 + 3, 20);
+        a.write(12 * 0x40 + 0x10, 0x01);
         a.write(KEYON_ADDR, 0x1C);
 
         for _ in 0..50 {

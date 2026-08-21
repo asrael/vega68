@@ -1,8 +1,8 @@
 .section .v68hdr,"a"
 .ascii	"V68\0"
-.long	0	        | version
-.long	_start	    | entry
-.long	0	        | reserved
+.long	0
+.long	_start
+.long	0
 
 .text
 .global	_start

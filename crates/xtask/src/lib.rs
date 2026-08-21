@@ -274,7 +274,7 @@ fn emit_bios_sym(map: &Path, out: &Path) -> Result<(), String> {
     write_atomic(out, lines.join("\n").as_bytes())
 }
 
-fn find_files(dir: &Path, exts: &[&str]) -> Result<Vec<PathBuf>, String> {
+pub fn find_files(dir: &Path, exts: &[&str]) -> Result<Vec<PathBuf>, String> {
     let mut files = Vec::new();
 
     for entry in std::fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {

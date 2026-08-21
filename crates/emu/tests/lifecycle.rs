@@ -1,6 +1,6 @@
 mod common;
 
-use common::{DONE, MAX_FRAMES, assert_cart, bios_symbol, build, build_bios, run_until};
+use common::{assert_cart, bios_symbol, build, build_bios, run_until, wait_for_done};
 use vega68::System;
 use vega68::bus::{PAD_DOWN, PAD_L, PAD_START};
 
@@ -32,30 +32,6 @@ fn reset_restarts_the_cart_window_and_restores_the_machine() {
         sys.bus.irq_enable, 0,
         "reset left an interrupt source enabled"
     );
-}
-
-fn wait_for_done(sys: &mut System, from: usize, expected: &str) {
-    for frame in 0..MAX_FRAMES {
-        sys.run_frame();
-
-        if let Some(pos) = sys.bus.debug_out[from..].iter().position(|&b| b == DONE) {
-            let cut = from + pos + 1;
-            let mut want = expected.as_bytes().to_vec();
-            want.push(DONE);
-
-            assert_eq!(
-                String::from_utf8_lossy(&sys.bus.debug_out[from..cut]),
-                String::from_utf8_lossy(&want)
-            );
-            return;
-        }
-
-        assert!(
-            frame + 1 < MAX_FRAMES,
-            "{expected:?} did not finish in {MAX_FRAMES} frames; output so far:\n{}",
-            String::from_utf8_lossy(&sys.bus.debug_out[from..])
-        );
-    }
 }
 
 #[test]

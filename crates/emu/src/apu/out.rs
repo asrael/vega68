@@ -3,10 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-/// 4 frames of 800 stereo pairs (1600 i16 each): target latency 2-4 frames.
 const CAPACITY: usize = 6400;
 
-/// First i16 (native) or f32 (converted in the callback) 48 kHz stereo config found.
 fn find_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
     let rate = cpal::SampleRate(48_000);
     let ranges: Vec<_> = device
@@ -29,7 +27,7 @@ fn find_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
 
 pub struct AudioOut {
     ring: Ring,
-    #[allow(dead_code)] // held only to keep the stream alive; dropping it stops playback
+    #[allow(dead_code)]
     stream: cpal::Stream,
 }
 
@@ -124,7 +122,7 @@ impl Ring {
 
         buf.extend(samples);
         let over = buf.len().saturating_sub(self.capacity);
-        let over = over + (over & 1); // round up to even: keeps the L/R interleave aligned
+        let over = over + (over & 1);
         buf.drain(..over);
     }
 }
@@ -146,7 +144,7 @@ mod tests {
         assert_eq!(pop(&ring), 0, "empty ring must yield silence");
 
         ring.push(&[1, 2, 3, 4]);
-        ring.push(&[5, 6]); // over capacity: 1, 2 fall out
+        ring.push(&[5, 6]);
 
         assert_eq!(
             [pop(&ring), pop(&ring), pop(&ring), pop(&ring)],
@@ -159,7 +157,7 @@ mod tests {
         let ring = Ring::new(4);
 
         ring.push(&[1, 2, 3, 4]);
-        ring.push(&[5, 6, 7]); // len 7, over = 3: must round to 4, not drop an odd count
+        ring.push(&[5, 6, 7]);
 
         assert_eq!(
             [pop(&ring), pop(&ring), pop(&ring), pop(&ring)],

@@ -1,8 +1,5 @@
 #include "vega68_gfx.h"
 
-// staged ring cursor: one owner per image, like the sound driver's pool.
-// tail is the ring's own sequence counter, not a bounded offset -- it wraps
-// at 2^16 and the ring index is the low bits of it.
 static u32 ring;
 static u32 ring_mask;
 static u16 tail;
@@ -25,8 +22,8 @@ void v68_3d_init(u32 ring_off, u32 ring_words, u32 color_off, u32 z_off, u16 w, 
     V68_TPU_STATE->height = h;
 
     ring = ring_off;
-    ring_mask = ring_words - 1; // ring_words is a power of two or the TPU drains nothing
-    tail = *V68_TPU_HEAD;       // the new ring starts empty wherever the drained one left off
+    ring_mask = ring_words - 1;
+    tail = *V68_TPU_HEAD;
 }
 
 void v68_3d_fill(u16 x0, u16 y0, u16 x1, u16 y1, u8 flags, u8 color, u16 z) {

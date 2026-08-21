@@ -24,8 +24,8 @@ static const V68Track t_b3[] = { { bad_psg, 1, 0, 8, 0 } };
 static const V68Track t_b4[] = { { bad_group, 1, 0, 0, 0 } };
 static const V68Track t_b5[] = { { bad_empty_bar, 1, 0, 0, 0 } };
 static const V68Track t_b6[] = { { bad_empty_bracket, 1, 0, 0, 0 } };
-static const V68Track t_b7[] = { { loop_ok, 1, 0, 12, 0 } };   // ch 12: out of v1 scope (PCM+)
-static const V68Track t_b8[] = { { loop_ok, 1, 12, 0, 0 } };   // patch 12, no patch_ptr override
+static const V68Track t_b7[] = { { loop_ok, 1, 0, 12, 0 } };
+static const V68Track t_b8[] = { { loop_ok, 1, 12, 0, 0 } };
 static const V68Track t_b9[] = { { bad_weight, 1, 0, 0, 0 } };
 static const V68Track t_b10[] = { { bad_bracket, 1, 0, 0, 0 } };
 static const V68Track t_b11[] = {
@@ -56,7 +56,7 @@ static const V68Song b8 = { s_b8, 1, 0 };
 static const V68Song b9 = { s_b9, 1, 0 };
 static const V68Song b10 = { s_b10, 1, 0 };
 static const V68Song b11 = { s_b11, 1, 0 };
-static const V68Song b12 = { s_b12, 1, 3 }; // 1 section, loop_section 3: out of range
+static const V68Song b12 = { s_b12, 1, 3 };
 
 void main(void) {
     if (v68_song_start(&ok) == 0)

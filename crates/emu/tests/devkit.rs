@@ -16,9 +16,6 @@ fn audio_devkit_keys_a_patch_and_the_mix_matches_the_golden() {
         sys.bus.apu.frame.iter().any(|&s| s != 0),
         "fixture produced silence"
     );
-    // devkit/vega68_sfx.c links into every cart (including this one, which never
-    // calls it) — its static pool is part of this cart's BSS. If this golden moves
-    // after resizing that pool, that's the layout shift to check first, not a mix bug.
     assert_eq!(
         fnv1a64(&sys.bus.apu.frame),
         0xb87e_5b5a_725c_2fe5,
@@ -32,7 +29,7 @@ fn sound_devkit_plays_a_two_bar_song_and_the_mix_matches_the_golden() {
         return;
     };
 
-    sys.run_frame(); // fixture halted in while(true) after "ok": one more frame of decay past the last dispatched event, not a further song tick
+    sys.run_frame();
 
     let status = ((sys.bus.apu.read(0x402) as u16) << 8) | sys.bus.apu.read(0x403) as u16;
     assert!(
@@ -40,9 +37,6 @@ fn sound_devkit_plays_a_two_bar_song_and_the_mix_matches_the_golden() {
         "neither lead nor bass channel is audible after the loop"
     );
 
-    // Level floor, not a golden: nonzero-but-inaudible output has shipped
-    // once already (gcc's aliased post-increment miscompile shifted every
-    // patch byte one register late, leaving peaks near -68 dBFS).
     let peak = sys.bus.apu.frame.iter().map(|&s| s.abs()).max().unwrap();
     assert!(
         peak > 300,
@@ -86,10 +80,7 @@ fn sound_patches_devkit_keys_all_twelve_presets_audible_and_distinct() {
 
     let mut fingerprints = Vec::new();
     for (i, line) in lines[..12].iter().enumerate() {
-        assert!(
-            line.ends_with(" on"),
-            "preset {i} never keyed on: {line:?}"
-        );
+        assert!(line.ends_with(" on"), "preset {i} never keyed on: {line:?}");
 
         let want_prefix = format!("p{i} ");
         assert!(
@@ -120,10 +111,6 @@ fn sound_patches_devkit_keys_all_twelve_presets_audible_and_distinct() {
 
 #[test]
 fn tpu_devkit_rasterises_two_triangles_and_the_frame_matches_the_golden() {
-    // The hex word is the fragment counter read after the tail register drained,
-    // before the next frame start zeroes it: 14,400 for the quarter-cost
-    // full-target FILL, 9,500 covered fragments for the textured triangle
-    // (exactly its area) and 7,810 for the blended one (area 7,800).
     let Some(sys) = assert_cart("tpu", "00007bde\nok\n") else {
         return;
     };
@@ -137,14 +124,6 @@ fn tpu_devkit_rasterises_two_triangles_and_the_frame_matches_the_golden() {
     let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
     sys.render(&mut out);
 
-    // Covers the composited 320x180 output, which under TPU_PLANE is the
-    // colour target mapped through the cart's palette and nothing else. The
-    // fixture's tables put every feature in its own index band, so a drift
-    // localises: 1 is the FILL background (41,386 px), 16..=26 the textured
-    // triangle's level-0 texels shifted by its dithered colormap shades
-    // (8,404 px visible), 138..=145 the blended triangle's level-1 texels
-    // through the blend table (7,810 px, of which 1,096 land over the
-    // textured one, which is also the z-test's only observable seam).
     assert_eq!(
         fnv1a64_pixels(&out),
         0x8aaa_8af3_619e_c60a,

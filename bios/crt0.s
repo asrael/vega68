@@ -1,10 +1,10 @@
 .section .vectors,"a"
 .long	__stack_top
 .long	_start
-.rept	23	| 2..24: faults, reserved and spurious
+.rept	23
 .long	v68_fault
 .endr
-.rept	7	| 25..31: autovectors, including the app-facing line and vblank
+.rept	7
 .long	v68_rte_stub
 .endr
 

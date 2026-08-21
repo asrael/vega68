@@ -12,7 +12,6 @@ static inline i32 v68_divs(i64 n, i32 d) {
     return lo;
 }
 
-// a in 0..1023 angle units, 16.16 out
 static inline i32 v68_fsin(u32 a) {
     i32 half = (i32)(a & 511);
     i32 y = half * (512 - half);

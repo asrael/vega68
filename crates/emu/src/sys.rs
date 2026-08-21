@@ -5,7 +5,6 @@ use crate::bus::{Bus, CART_BASE, FB_BASE, LINES_PER_FRAME, VDP_MODE, VISIBLE_LIN
 use crate::cart::{self, CartError};
 use crate::vdp;
 
-/// 100 MHz @ ~5 cycles/instruction, 60 fps, 200 lines/frame.
 pub const INSTRUCTIONS_PER_LINE: u32 = 1_667;
 
 const FRAME_SAMPLES: usize = LINES_PER_FRAME as usize * apu::SAMPLES_PER_LINE * 2;
@@ -75,9 +74,6 @@ impl System {
         self.top_up_frame(lines_run);
     }
 
-    // Runs the CPU line by line, rendering that line's audio as it completes.
-    // Returns how many lines actually got their audio rendered this call --
-    // fewer than LINES_PER_FRAME if the CPU stuck partway through.
     fn run_cpu_lines(&mut self) -> u32 {
         let mut lines_run = 0;
 
@@ -139,7 +135,7 @@ impl System {
                 };
 
                 if r.instructions + taken == 0 {
-                    break 'frame; // stuck: don't spin forever
+                    break 'frame;
                 }
 
                 instructions += r.instructions + taken;
@@ -153,13 +149,6 @@ impl System {
         lines_run
     }
 
-    // A stuck CPU (`run_cpu_lines` returning short) leaves the audio frame
-    // partial; top up the remaining lines so it is always full. Tracking
-    // `lines_run` explicitly (not the frame's own length) matters when the
-    // CPU sticks on line 0 before that line's `apu.run_line` ever runs: the
-    // frame buffer is still whatever the *previous* call to `run_frame` left
-    // it at (a full 1600-sample frame), so a length-based check would no-op
-    // and silently replay stale audio instead of rebuilding this frame.
     fn top_up_frame(&mut self, mut lines_run: u32) {
         while lines_run < LINES_PER_FRAME {
             let Bus { apu, mem, .. } = &mut self.bus;
@@ -173,9 +162,9 @@ impl System {
 
 #[cfg(test)]
 mod tests {
-    use m68k::AddressBus;
     use super::*;
     use crate::cart::{HEADER_LEN, test_bios, test_cart};
+    use m68k::AddressBus;
 
     #[test]
     fn boots_bios_vectors() {
@@ -196,12 +185,12 @@ mod tests {
 
             bios[0..4].copy_from_slice(&crate::bus::STACK_TOP.to_be_bytes());
             bios[4..8].copy_from_slice(&8u32.to_be_bytes());
-            bios[8..10].copy_from_slice(&[0x4e, 0xf9]); // jmp entry
+            bios[8..10].copy_from_slice(&[0x4e, 0xf9]);
             bios[10..14].copy_from_slice(&entry.to_be_bytes());
             bios[vector * 4..vector * 4 + 4].copy_from_slice(&(HANDLER as u32).to_be_bytes());
-            bios[HANDLER..HANDLER + 4].copy_from_slice(&[0x33, 0xfc, 0x00, 0x21]); // move.w #'!'
+            bios[HANDLER..HANDLER + 4].copy_from_slice(&[0x33, 0xfc, 0x00, 0x21]);
             bios[HANDLER + 4..HANDLER + 8].copy_from_slice(&crate::bus::DEBUG_PUTC.to_be_bytes());
-            bios[HANDLER + 8..HANDLER + 10].copy_from_slice(&[0x60, 0xfe]); // bra.s *
+            bios[HANDLER + 8..HANDLER + 10].copy_from_slice(&[0x60, 0xfe]);
 
             let cart = test_cart(&[opcode[0], opcode[1], 0x60, 0xfe]);
             let mut m = System::new(&bios, &cart).unwrap();
@@ -218,13 +207,13 @@ mod tests {
     #[test]
     fn line_irq_fires_matches_the_worked_table() {
         let cases: [(u16, u16, u32); 7] = [
-            (185, 0, 1), // decision 1: interval 0 still fires in vblank
+            (185, 0, 1),
             (40, 0, 1),
             (40, 2, 70),
-            (41, 2, 70), // odd compare, even interval: phase, not modulus
+            (41, 2, 70),
             (0, 1, 180),
             (170, 5, 2),
-            (185, 2, 0), // repeat clamp: no fire in vblank
+            (185, 2, 0),
         ];
 
         for (compare, interval, want) in cases {
@@ -266,7 +255,7 @@ mod tests {
     #[test]
     fn reload_replaces_cart_bytes_and_sets_the_reload_reason() {
         let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
-        let new_cart = test_cart(&[0x4e, 0x71, 0x60, 0xfe]); // nop; bra.s *
+        let new_cart = test_cart(&[0x4e, 0x71, 0x60, 0xfe]);
 
         m.reload(&new_cart).unwrap();
 
@@ -286,7 +275,7 @@ mod tests {
         let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
         let noinit_addr = crate::bus::RAM_BASE as usize + crate::bus::BIOS_PARTITION as usize;
 
-        m.bus.mem[noinit_addr] = 0xAB; // stand-in for a cart .noinit byte
+        m.bus.mem[noinit_addr] = 0xAB;
 
         m.reload(&test_cart(&[0x60, 0xfe])).unwrap();
 
@@ -320,18 +309,26 @@ mod tests {
         assert_eq!(m.bus.line_compare, 0, "line_compare not reset");
         assert_eq!(m.bus.line_interval, 0, "line_interval not reset");
         assert_eq!(m.bus.brightness, 255, "brightness not reset");
-        assert_eq!(m.bus.read_byte(crate::bus::AUDIO_BASE), 0, "apu register not reset");
+        assert_eq!(
+            m.bus.read_byte(crate::bus::AUDIO_BASE),
+            0,
+            "apu register not reset"
+        );
         assert_eq!(m.bus.tpu.head, 0, "tpu head not reset");
         assert_eq!(m.bus.tpu.tail, 0, "tpu tail not reset");
         assert_eq!(m.bus.tpu.pixels, 0, "tpu pixels not reset");
         assert_eq!(m.bus.tpu.deficit, 0, "tpu deficit not reset");
-        assert_eq!(m.bus.read_word(crate::bus::VDP_MODE), 0, "VDP_MODE not reset");
+        assert_eq!(
+            m.bus.read_word(crate::bus::VDP_MODE),
+            0,
+            "VDP_MODE not reset"
+        );
         assert_eq!(m.bus.read_long(crate::bus::FB_BASE), 0, "FB_BASE not reset");
     }
 
     #[test]
     fn run_frame_redrains_a_command_the_budget_deferred_to_the_next_frame() {
-        use crate::bus::{TPU_TAIL, TPU_RAM_BASE};
+        use crate::bus::{TPU_RAM_BASE, TPU_TAIL};
 
         const RING: u32 = 0x40;
         const COLOR: u32 = 0x1000;
@@ -345,31 +342,46 @@ mod tests {
         let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
 
         m.bus.write_long(TPU_RAM_BASE, RING);
-        m.bus.write_long(TPU_RAM_BASE + 4, 16); // ring_words: power of two, room for 2 FILL commands
+        m.bus.write_long(TPU_RAM_BASE + 4, 16);
         m.bus.write_long(TPU_RAM_BASE + 8, COLOR);
-        m.bus.write_long(TPU_RAM_BASE + 12, 0); // z_base unused
+        m.bus.write_long(TPU_RAM_BASE + 12, 0);
         m.bus.write_word(TPU_RAM_BASE + 16, WIDTH);
         m.bus.write_word(TPU_RAM_BASE + 18, HEIGHT);
 
-        // cmd1 covers the whole target (3,610,000 px, cost 902,500): alone it
-        // overshoots PIXEL_BUDGET (833,333) by 69,167 and must defer cmd2.
         let cmd1 = fill(0x01, 0, 0, WIDTH as u32, HEIGHT as u32, 5);
-        let cmd2 = fill(0x01, 0, 0, 2, 2, 9); // 4 px, cost 1
+        let cmd2 = fill(0x01, 0, 0, 2, 2, 9);
 
         for (i, w) in cmd1.into_iter().chain(cmd2).enumerate() {
             m.bus.write_long(TPU_RAM_BASE + RING + i as u32 * 4, w);
         }
 
-        m.bus.write_word(TPU_TAIL, 10); // tail: both commands queued
+        m.bus.write_word(TPU_TAIL, 10);
 
-        assert_ne!(m.bus.tpu.head, m.bus.tpu.tail, "command 2 must not run before the budget resets");
-        assert_eq!(m.bus.read_byte(TPU_RAM_BASE + COLOR), 5, "command 2 ran before its budget was granted");
+        assert_ne!(
+            m.bus.tpu.head, m.bus.tpu.tail,
+            "command 2 must not run before the budget resets"
+        );
+        assert_eq!(
+            m.bus.read_byte(TPU_RAM_BASE + COLOR),
+            5,
+            "command 2 ran before its budget was granted"
+        );
 
         m.run_frame();
 
-        assert_eq!(m.bus.tpu.head, m.bus.tpu.tail, "ring not fully drained after frame_start");
-        assert_eq!(m.bus.read_byte(TPU_RAM_BASE + COLOR), 9, "command 2 never ran after the budget reset");
-        assert_eq!(m.bus.tpu.pixels, 1, "frame_start must zero pixels before re-draining");
+        assert_eq!(
+            m.bus.tpu.head, m.bus.tpu.tail,
+            "ring not fully drained after frame_start"
+        );
+        assert_eq!(
+            m.bus.read_byte(TPU_RAM_BASE + COLOR),
+            9,
+            "command 2 never ran after the budget reset"
+        );
+        assert_eq!(
+            m.bus.tpu.pixels, 1,
+            "frame_start must zero pixels before re-draining"
+        );
     }
 
     #[test]
@@ -382,22 +394,11 @@ mod tests {
 
     #[test]
     fn top_up_rebuilds_a_stale_frame_when_the_cpu_sticks_before_line_zero() {
-        // Regression seam for a bug where the stuck-CPU top-up gated on
-        // `apu.frame.len() < 1600`: if the CPU stuck on line 0 before that
-        // line's `apu.run_line` ran, the frame buffer was still the
-        // *previous* frame's full 1600 samples, so the length check no-oped
-        // and stale audio got replayed. A real zero-instruction CPU stall is
-        // impractical to construct from a test cart (STOP and every
-        // exception path always retire >= 1 instruction in this emulator),
-        // so this exercises the fixed seam (`top_up_frame`, driven by an
-        // explicit `lines_run` count rather than the frame's own length)
-        // directly with `lines_run == 0`, the exact precondition a
-        // stuck-at-line-0 CPU leaves behind.
         let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
         m.run_frame();
         let real = m.bus.apu.frame.clone();
 
-        m.bus.apu.frame = vec![i16::MAX; 1600]; // stale sentinel frame, as if never cleared
+        m.bus.apu.frame = vec![i16::MAX; 1600];
         m.top_up_frame(0);
 
         assert_ne!(
@@ -413,19 +414,21 @@ mod tests {
 
     #[test]
     fn a_cart_write_to_the_apu_is_heard_the_same_frame() {
-        // move.w #0x00FE, PERIOD(ch 8); move.b #0, ATTEN — then loop
         let base = 0xFF00_0400u32 + 8 * 0x40;
         let mut code = vec![];
-        code.extend([0x33, 0xFC, 0x00, 0xFE]); // move.w #0x00FE, (xxx).l
+        code.extend([0x33, 0xFC, 0x00, 0xFE]);
         code.extend(base.to_be_bytes());
-        code.extend([0x42, 0x39]); // clr.b (xxx).l
+        code.extend([0x42, 0x39]);
         code.extend((base + 2).to_be_bytes());
-        code.extend([0x60, 0xFE]); // bra.s *
+        code.extend([0x60, 0xFE]);
 
         let mut m = System::new(&test_bios(), &test_cart(&code)).unwrap();
         m.run_frame();
 
-        assert!(m.bus.apu.frame.iter().any(|&s| s != 0), "square never reached the mix");
+        assert!(
+            m.bus.apu.frame.iter().any(|&s| s != 0),
+            "square never reached the mix"
+        );
     }
 
     #[test]
@@ -439,7 +442,7 @@ mod tests {
             m.bus.mem[CART_BASE as usize..CART_BASE as usize + HEADER_LEN + 2].to_vec();
 
         let mut bad = test_cart(&[0x60, 0xfe]);
-        bad[0] = b'X'; // bad magic
+        bad[0] = b'X';
 
         let err = m.reload(&bad).unwrap_err();
 

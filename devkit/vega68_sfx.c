@@ -1,16 +1,13 @@
 #include "vega68_sfx.h"
 
-#define V68_SOUND_MAX_TRACKS  64 // flat (section,track) cap across a song; generous headroom
-#define V68_GROUP_MAX         32 // top-level or bracket element cap per notation group
-#define V68_SOUND_MAX_ACTIVE   8 // per-section track cap, enforced in parse_section
+#define V68_SOUND_MAX_TRACKS  64
+#define V68_GROUP_MAX         32
+#define V68_SOUND_MAX_ACTIVE   8
 
 typedef struct { u8 note; u16 frames; } V68Ev;
 typedef struct { u16 first; u16 count; } V68TrackLayout;
-typedef struct { u16 next_idx; u16 frames_left; } V68TrackState; // per active track, this section
+typedef struct { u16 next_idx; u16 frames_left; } V68TrackState;
 
-// one notation element, bounds into the bar string; brackets carry inner content bounds.
-// elements the scanner rejects outright (unterminated bracket, @n out of range) set bad;
-// [start, full_end) is the whole token for the diagnostic.
 typedef struct {
     bool is_bracket;
     const char *start;
@@ -20,25 +17,21 @@ typedef struct {
     bool bad;
 } Elem;
 
-// per-track parse state, threaded through the group/leaf recursion
 typedef struct {
     u8 ch;
     i8 transpose;
     bool perc;
-    i32 last_event; // pool index of the last appended event (note or rest), or -1
+    i32 last_event;
     bool overflow;
     bool empty_group;
     const char *bad_tok;
     i32 bad_len;
 } PCtx;
 
-// bit n set = op n is a carrier under algorithm n; vol attenuates carriers only
 static const u8 alg_carriers[8] = { 0x08, 0x08, 0x08, 0x08, 0x0A, 0x0E, 0x0E, 0x0F };
 
-// PSG plays full scale where FM carries patch TL headroom; this base drop
-// puts a full-level PSG track at the same loudness as a typical FM patch.
 #define V68_PSG_LEVEL_BASE  6
-#define V68_PERC_LEVEL_BASE 3 // transients read quieter than sustained tones; halve their drop
+#define V68_PERC_LEVEL_BASE 3
 
 static V68Ev pool[V68_SOUND_POOL];
 static u16 pool_used;
@@ -46,25 +39,20 @@ static V68TrackLayout layout[V68_SOUND_MAX_TRACKS];
 static u16 layout_used;
 static const V68Song *playing;
 
-// active-playback state: current section and its track cursors
 static u8  section;
-static u16 section_base;        // layout index where this section's tracks start
-static u8  section_tracks;      // == playing->sections[section].track_count
+static u16 section_base;
+static u8  section_tracks;
 static u32 section_frames_left;
 static V68TrackState state[V68_SOUND_MAX_ACTIVE];
 
-/// block-4 fnums C4..B4, fnum = round(freq * 2^20 / (53267.03 * 8)), A4 = 440 Hz
 const u16 v68_fnum[12] = {
     644, 682, 723, 766, 811, 859, 910, 965, 1022, 1083, 1147, 1215,
 };
 
-/// octave-4 PSG periods, period = round(3579545 / (32 * freq))
 const u16 v68_psg_period[12] = {
     428, 404, 381, 360, 339, 320, 302, 285, 269, 254, 240, 226,
 };
 
-// first-pass FM voices for the SF/CT/LttP palette; byte layout and algorithm
-// wiring per ~spec/2026-08-06-sound-system.md. Tuning is ear-work for later.
 const V68Patch v68_patches[12] = {
     [V68_PATCH_BRASS] = {
         .op = {
@@ -176,9 +164,6 @@ const V68Patch v68_patches[12] = {
         .fb_alg = 0x2A,
         .echo = 0,
     },
-    // ch-11 tracks never touch the FM op array (perc_ctrl/perc_decay drive the noise
-    // kit directly); these are BASS's op bytes with FB bumped so the fingerprint stays
-    // distinct. Only .echo is live for a V68_PATCH_PERC track.
     [V68_PATCH_PERC] = {
         .op = {
             { 0x41, 0x14, 0x1F, 0x0E, 0x04, 0x37, 0x00 },
@@ -202,7 +187,7 @@ static void sound_clear(void) {
 }
 
 static void putdec(u32 v) {
-    char buf[3]; // u8 max 255
+    char buf[3];
     i32 n = 0;
 
     if (v == 0) {
@@ -247,7 +232,6 @@ static void diag_empty_group(u8 sec, u8 trk, u8 bar) {
     v68_puts(": empty group\n");
 }
 
-// letter -> semitone class within an octave (c=0 .. b=11); -1 if not a note letter
 static i32 pitch_class(char c) {
     switch (c) {
     case 'c': return 0;
@@ -261,7 +245,6 @@ static i32 pitch_class(char c) {
     }
 }
 
-// percussion letter -> pool note slot (k/s/h); -1 if not a perc token
 static i32 perc_slot(char c) {
     switch (c) {
     case 'k': return 2;
@@ -271,10 +254,6 @@ static i32 perc_slot(char c) {
     }
 }
 
-// parse one element (bracket-or-leaf, plus an optional trailing "@n" weight) at *pp,
-// which must point at a non-space char before `end`; advances *pp past it. An
-// unterminated bracket or an out-of-range "@n" (must be 1-32) sets e.bad instead of
-// silently accepting a default.
 static Elem scan_element(const char **pp, const char *end) {
     const char *p = *pp;
     Elem e;
@@ -303,7 +282,7 @@ static Elem scan_element(const char **pp, const char *end) {
         }
 
         e.end = p;
-        p++; // skip ']'
+        p++;
 
         if (p < end && *p == '@') {
             p++;
@@ -360,9 +339,6 @@ static Elem scan_element(const char **pp, const char *end) {
     return e;
 }
 
-// scan one group's top-level elements between [start,end) (bracket content or a whole bar
-// string). More than V68_GROUP_MAX elements is an error (silently truncating would retime
-// the bar), reported as a bad token naming the overflowing element.
 static bool scan_group(PCtx *ctx, const char *start, const char *end, Elem *out, i32 *count) {
     const char *p = start;
     i32 n = 0;
@@ -645,17 +621,14 @@ void v68_fm_patch(u8 ch, const V68Patch *p) {
     reg[0x1E] = p->fb_alg;
 }
 
-// percussion (ch 11) note -> noise CTRL: bit2 selects white(1)/periodic(0), bits[1:0] the
-// rate divisor; k=periodic clk/2048, s=white clk/1024, h=white clk/512 (pool slots 2/3/4)
 static u8 perc_ctrl(u8 note) {
     switch (note) {
-    case 3:  return 0x05; // s
-    case 4:  return 0x04; // h
-    default: return 0x02; // k
+    case 3:  return 0x05;
+    case 4:  return 0x04;
+    default: return 0x02;
     }
 }
 
-// kit envelope: attenuation ramps from 0 towards silence every frame the note isn't retriggered
 static void perc_decay(u8 ch) {
     volatile u8 *atten = &V68_AUDIO_CH(ch)[0x02];
     u8 v = *atten;
@@ -664,19 +637,27 @@ static void perc_decay(u8 ch) {
         *atten = (v + 2 > 15) ? 15 : (u8)(v + 2);
 }
 
+static void ch_silence(u8 ch) {
+    if (ch < 8)
+        *V68_AUDIO_KEYON = ch;
+    else
+        V68_AUDIO_CH(ch)[0x02] = 15;
+}
+
+static u8 level_steps(const V68Track *trk) {
+    return trk->level == 0 ? 0 : (trk->level > 15 ? 0 : (u8)(15 - trk->level));
+}
+
 static void dispatch_event(const V68Track *trk, u16 idx) {
     u8 ch = trk->ch;
     u8 note = pool[idx].note;
 
     if (note == 0) {
-        if (ch < 8)
-            *V68_AUDIO_KEYON = ch;
-        else
-            V68_AUDIO_CH(ch)[0x02] = 15;
+        ch_silence(ch);
         return;
     }
 
-    u8 steps = trk->level == 0 ? 0 : (trk->level > 15 ? 0 : 15 - trk->level);
+    u8 steps = level_steps(trk);
     u32 psg_atten = (u32)V68_PSG_LEVEL_BASE + steps;
     u8 atten = psg_atten > 15 ? 15 : (u8)psg_atten;
 
@@ -688,7 +669,6 @@ static void dispatch_event(const V68Track *trk, u16 idx) {
         return;
     }
 
-    // transpose is already folded into `note` at parse time
     i32 absolute = note - 2;
     i32 pc = absolute % 12;
     i32 oct = absolute / 12;
@@ -740,11 +720,7 @@ static void section_enter(u8 sec) {
             if (section_uses_channel(s, ch))
                 continue;
 
-            if (ch < 8)
-                *V68_AUDIO_KEYON = ch;
-            else
-                V68_AUDIO_CH(ch)[0x02] = 15;
-
+            ch_silence(ch);
             esend &= (u16)~(1 << ch);
         }
     }
@@ -761,7 +737,7 @@ static void section_enter(u8 sec) {
         if (trk->ch < 8) {
             v68_fm_patch(trk->ch, patch);
 
-            u8 steps = trk->level == 0 ? 0 : (trk->level > 15 ? 0 : 15 - trk->level);
+            u8 steps = level_steps(trk);
 
             if (steps > 0) {
                 volatile u8 *pg = V68_AUDIO_CH(trk->ch);
@@ -851,14 +827,8 @@ void v68_song_stop(void) {
     if (playing && section_tracks > 0) {
         const V68Section *s = &playing->sections[section];
 
-        for (u8 t = 0; t < s->track_count; t++) {
-            u8 ch = s->tracks[t].ch;
-
-            if (ch < 8)
-                *V68_AUDIO_KEYON = ch;
-            else
-                V68_AUDIO_CH(ch)[0x02] = 15;
-        }
+        for (u8 t = 0; t < s->track_count; t++)
+            ch_silence(s->tracks[t].ch);
     }
 
     sound_clear();

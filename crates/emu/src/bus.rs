@@ -3,19 +3,19 @@ use m68k::{AddressBus, FastMem};
 use crate::apu::Apu;
 use crate::tpu::{self, Tpu};
 
-pub const BIOS_SIZE: u32 = 0x0010_0000; // 1 MiB window
+pub const BIOS_SIZE: u32 = 0x0010_0000;
 pub const CART_BASE: u32 = 0x0100_0000;
-pub const CART_SIZE: u32 = 0x0100_0000; // 16 MiB max
+pub const CART_SIZE: u32 = 0x0100_0000;
 pub const RAM_BASE: u32 = 0x0200_0000;
-pub const RAM_SIZE: u32 = 0x0040_0000; // 4 MiB
-pub const BIOS_PARTITION: u32 = 0x0002_0000; // 128 KiB at the base of RAM
+pub const RAM_SIZE: u32 = 0x0040_0000;
+pub const BIOS_PARTITION: u32 = 0x0002_0000;
 pub const STACK_TOP: u32 = RAM_BASE + BIOS_PARTITION;
 pub const VRAM_BASE: u32 = 0x0300_0000;
-pub const VRAM_SIZE: u32 = 0x0008_0000; // 512 KiB
+pub const VRAM_SIZE: u32 = 0x0008_0000;
 pub const PALETTE_BASE: u32 = 0x0308_0000;
-pub const PALETTE_SIZE: u32 = 0x0000_0400; // 256 entries x 4 B
+pub const PALETTE_SIZE: u32 = 0x0000_0400;
 pub const TPU_RAM_BASE: u32 = 0x0400_0000;
-pub const TPU_RAM_SIZE: u32 = 0x0040_0000; // 4 MiB
+pub const TPU_RAM_SIZE: u32 = 0x0040_0000;
 pub const MEM_END: u32 = TPU_RAM_BASE + TPU_RAM_SIZE;
 pub const MMIO_BASE: u32 = 0xFF00_0000;
 pub const AUDIO_BASE: u32 = 0xFF00_0400;
@@ -40,9 +40,8 @@ pub const TPU_HEAD: u32 = 0xFF00_0A08;
 pub const TPU_PIXELS_LO: u32 = 0xFF00_0A0C;
 pub const TPU_PIXELS_HI: u32 = 0xFF00_0A10;
 
-pub const TPU_BUSY: u16 = 0x8000; // TPU_STATUS bit 15: head != tail
+pub const TPU_BUSY: u16 = 0x8000;
 
-// Plain VRAM, not MMIO -- read/written through the flat mem window.
 pub const VDP_MODE: u32 = VRAM_BASE + 0x6_1800;
 pub const FB_BASE: u32 = VRAM_BASE + 0x6_1804;
 
@@ -158,14 +157,12 @@ impl Bus {
     }
 
     fn write(&mut self, address: u32, value: u32, bytes: usize) {
-        // Byte-granular, per byte -- like read(): a write can straddle into
-        // AUDIO_BASE from below (e.g. a word write at AUDIO_BASE-1) even
-        // when the start address itself is not in range.
         for i in 0..bytes {
             let a = address.wrapping_add(i as u32);
 
             if (AUDIO_BASE..AUDIO_END).contains(&a) {
-                self.apu.write(a - AUDIO_BASE, (value >> (8 * (bytes - 1 - i))) as u8);
+                self.apu
+                    .write(a - AUDIO_BASE, (value >> (8 * (bytes - 1 - i))) as u8);
             }
         }
 
@@ -345,7 +342,6 @@ mod tests {
         assert_eq!(b.debug_out.len(), DEBUG_OUT_CAP);
     }
 
-
     #[test]
     fn mouse_deltas_read_back_signed() {
         let mut b = bus();
@@ -371,8 +367,8 @@ mod tests {
     fn audio_range_is_byte_granular_through_the_bus() {
         let mut b = bus();
 
-        b.write_byte(AUDIO_BASE + 0x1D, 0xAB); // an odd offset no u16 slot reaches
-        b.write_word(AUDIO_BASE, 0x7101); // spans two byte registers
+        b.write_byte(AUDIO_BASE + 0x1D, 0xAB);
+        b.write_word(AUDIO_BASE, 0x7101);
 
         assert_eq!(b.read_byte(AUDIO_BASE + 0x1D), 0xAB);
         assert_eq!(b.read_byte(AUDIO_BASE), 0x71);
@@ -384,7 +380,7 @@ mod tests {
     fn a_write_straddling_into_the_audio_range_still_reaches_the_apu() {
         let mut b = bus();
 
-        b.write_word(AUDIO_BASE - 1, 0xAB71); // second byte lands at APU reg 0
+        b.write_word(AUDIO_BASE - 1, 0xAB71);
 
         assert_eq!(
             b.read_byte(AUDIO_BASE),
@@ -405,12 +401,16 @@ mod tests {
     fn tpu_mmio_reads_back_head_tail_and_pixels() {
         let mut b = bus();
         b.tpu.head = 0x1234;
-        b.tpu.tail = 0x1234; // drained: head caught up, must read idle
+        b.tpu.tail = 0x1234;
         b.tpu.pixels = 0x0005_0001;
         assert_eq!(b.read_word(TPU_HEAD), 0x1234);
         assert_eq!(b.read_word(TPU_PIXELS_LO), 0x0001);
         assert_eq!(b.read_word(TPU_PIXELS_HI), 0x0005);
-        assert_eq!(b.read_word(TPU_STATUS) & 0x8000, 0, "idle must not read busy");
+        assert_eq!(
+            b.read_word(TPU_STATUS) & 0x8000,
+            0,
+            "idle must not read busy"
+        );
     }
 
     #[test]

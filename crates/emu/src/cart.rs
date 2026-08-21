@@ -1,10 +1,3 @@
-//! .v68 cart format (v0)
-//!   +0  magic  "V68\0"
-//!   +4  u32 BE version (0)
-//!   +8  u32 BE entry (m68k entry point)
-//!   +12 u32 BE reserved (0)
-//!   +16 payload: m68k image
-
 use crate::bus::{CART_BASE, CART_SIZE};
 
 pub const HEADER_LEN: usize = 16;
@@ -85,7 +78,6 @@ pub(crate) fn test_bios() -> Vec<u8> {
 
     b.extend_from_slice(&STACK_TOP.to_be_bytes());
     b.extend_from_slice(&8u32.to_be_bytes());
-    // move.l #0x7F, BRIGHTNESS; jmp cart_entry
     b.extend_from_slice(&[0x23, 0xfc, 0x00, 0x00, 0x00, 0x7f, 0xff, 0x00, 0x00, 0x10]);
     b.extend_from_slice(&[0x4e, 0xf9]);
     b.extend_from_slice(&(CART_BASE + HEADER_LEN as u32).to_be_bytes());

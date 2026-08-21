@@ -10,13 +10,10 @@ mod testkit;
 pub const CH_COUNT: usize = 14;
 pub const CH_STRIDE: u32 = 0x40;
 pub const PAN_OFF: [usize; 14] = [
-    0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, // FM ch 0-7
-    0x03, 0x03, 0x03, 0x03, // PSG ch 8-11
-    0x0F, 0x0F, // PCM ch 12-13
+    0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x03, 0x03, 0x03, 0x03, 0x0F, 0x0F,
 ];
 pub const SAMPLES_PER_LINE: usize = 4;
 
-/// 255 max delay steps * 192 samples/step (4 ms @ 48 kHz) + 192 rounding + 8 FIR history.
 const ECHO_RING_LEN: usize = 49_160;
 const EDELAY: u32 = GLOBAL + 0x12;
 const EFB: u32 = GLOBAL + 0x13;
@@ -27,14 +24,12 @@ const EVOL_R: u32 = GLOBAL + 0x15;
 const GLOBAL: u32 = 0x400;
 const KEYON: u32 = GLOBAL;
 const LFO: u32 = GLOBAL + 1;
-/// LFO reg [2:0] rate index -> Hz.
 const LFO_RATE_HZ: [f64; 8] = [3.98, 5.56, 6.02, 6.37, 6.88, 9.63, 48.1, 72.2];
-const MASTER: f64 = 1.0 / 3.0; // pinned by listening 2026-08-07; was the provisional 1/6
+const MASTER: f64 = 1.0 / 3.0;
 const REGS: usize = 0x500;
 const SAMPLE_RATE: f64 = 48_000.0;
 const STATUS: u32 = GLOBAL + 2;
 
-// Triangle wave over phase [0,1), range [-1,1], 0 at phase 0.
 fn tri(phase: f64) -> f64 {
     let p = phase.rem_euclid(1.0);
 
@@ -119,16 +114,16 @@ impl Apu {
         *self = Apu::default();
 
         for ch in 0..8 {
-            self.regs[(ch * 0x40 + 0x1F) as usize] = 0xC0; // FM pan L|R
+            self.regs[(ch * 0x40 + 0x1F) as usize] = 0xC0;
         }
 
         for ch in 8..12 {
-            self.regs[(ch * 0x40 + 0x02) as usize] = 15; // PSG silent
+            self.regs[(ch * 0x40 + 0x02) as usize] = 15;
             self.regs[(ch * 0x40 + 0x03) as usize] = 0xC0;
         }
 
         for ch in 12..14 {
-            self.regs[(ch * 0x40 + 0x0E) as usize] = 255; // PCM full volume
+            self.regs[(ch * 0x40 + 0x0E) as usize] = 255;
             self.regs[(ch * 0x40 + 0x0F) as usize] = 0xC0;
         }
     }
@@ -213,7 +208,7 @@ impl Apu {
 
         let edelay = self.regs[EDELAY as usize] as usize;
         if edelay != 0 {
-            let delay = edelay * 192; // 4 ms steps at 48 kHz
+            let delay = edelay * 192;
             let n = self.echo_ring.len() / 2;
             let fir_at = |side: usize, pos: usize| -> f64 {
                 (0..8).fold(0.0, |acc, i| {
@@ -275,9 +270,9 @@ mod tests {
     fn registers_read_back_byte_granular() {
         let mut a = Apu::new();
 
-        a.write(0x00, 0x71); // ch 0 op 1 DT/MUL
-        a.write(0x1C, 0x23); // ch 0 FREQ hi
-        a.write(0x1D, 0xAB); // ch 0 FREQ lo
+        a.write(0x00, 0x71);
+        a.write(0x1C, 0x23);
+        a.write(0x1D, 0xAB);
 
         assert_eq!(a.read(0x00), 0x71);
         assert_eq!(a.read(0x1C), 0x23);
@@ -325,15 +320,9 @@ mod tests {
 
     #[test]
     fn reset_clears_every_runtime_field_a_fresh_apu_starts_with() {
-        // reset() must be the single place runtime state is cleared: run a
-        // square through a frame (advances its oscillator phase), reset,
-        // configure it identically again and run one more frame — it must
-        // match a brand-new, identically configured Apu bit for bit. This
-        // catches a field (e.g. the square oscillators' `phase`) that
-        // `reset()` forgets to clear but `new()` happened to zero anyway.
         fn configure(a: &mut Apu) {
-            a.write(8 * 0x40 + 1, 100); // period
-            a.write(8 * 0x40 + 2, 0); // atten 0: audible
+            a.write(8 * 0x40 + 1, 100);
+            a.write(8 * 0x40 + 2, 0);
         }
 
         let mut a = Apu::new();
@@ -379,7 +368,7 @@ mod tests {
 
         a.write(8 * 0x40 + 1, 100);
         a.write(8 * 0x40 + 2, 0);
-        a.write(8 * 0x40 + 3, 0x80); // L only
+        a.write(8 * 0x40 + 3, 0x80);
 
         run_frame(&mut a, &[]);
         assert!(a.frame.chunks(2).all(|s| s[1] == 0));
@@ -397,13 +386,13 @@ mod tests {
         run_frame(&mut a, &[]);
         assert_eq!(status(&a) & (1 << 2), 1 << 2);
 
-        a.write(8 * 0x40 + 2, 3); // square 0 audible
+        a.write(8 * 0x40 + 2, 3);
         assert_eq!(status(&a) & (1 << 8), 1 << 8);
 
         a.write(KEYON_ADDR, 0x02);
 
         for _ in 0..1050 {
-            run_frame(&mut a, &[]); // RR=0's period-gated release drains in ~16.5 s
+            run_frame(&mut a, &[]);
         }
 
         assert_eq!(
@@ -420,12 +409,11 @@ mod tests {
         a.write(0x413, efb as u8);
         a.write(0x414, evol as u8);
         a.write(0x415, evol as u8);
-        a.write(0x416, 127); // identity-ish FIR: tap 0 only
+        a.write(0x416, 127);
     }
 
     #[test]
     fn echo_repeats_an_impulse_at_the_programmed_delay() {
-        // 1-sample full-scale PCM impulse, echo-sent, delay 1 step = 192 samples
         let mut mem = vec![0u8; 16];
         mem[0] = 0x7F;
 
@@ -436,19 +424,18 @@ mod tests {
         run_frame(&mut a, &mem);
 
         assert_eq!(a.frame[0], 10837, "dry impulse moved or rescaled");
-        let idx = |s: usize| s * 2; // left sample s
-        assert_eq!(
-            a.frame[idx(192)],
-            10668, /* 10837*(127/128)^2 truncated */
-            "echo not at delay"
-        );
+        let idx = |s: usize| s * 2;
+        assert_eq!(a.frame[idx(192)], 10668, "echo not at delay");
         let stray = a
             .frame
             .iter()
             .enumerate()
             .filter(|&(i, &s)| s != 0 && i != 0 && i != 1 && i / 2 != 192)
             .count();
-        assert_eq!(stray, 0, "echo leaked outside the impulse and its single repeat");
+        assert_eq!(
+            stray, 0,
+            "echo leaked outside the impulse and its single repeat"
+        );
     }
 
     #[test]
@@ -458,14 +445,17 @@ mod tests {
 
         let mut a = Apu::new();
         pcm_setup(&mut a, 0, 1, 48000);
-        set_echo(&mut a, 1 << 12, 1, 64, 127); // efb = 0.5
+        set_echo(&mut a, 1 << 12, 1, 64, 127);
         a.write(KEYON_ADDR, 0x1C);
         run_frame(&mut a, &mem);
 
         let e1 = a.frame[192 * 2];
         let e2 = a.frame[384 * 2];
         let e3 = a.frame[576 * 2];
-        assert!(e1 > e2 && e2 > e3 && e3 > 0, "repeats must decay monotonically: {e1} {e2} {e3}");
+        assert!(
+            e1 > e2 && e2 > e3 && e3 > 0,
+            "repeats must decay monotonically: {e1} {e2} {e3}"
+        );
         assert_eq!(e2, 5292, "second repeat drifted");
     }
 
@@ -474,26 +464,30 @@ mod tests {
         let mut mem = vec![0u8; 16];
         mem[0] = 0x7F;
 
-        // sent but delay 0: no echo at all
         let mut a = Apu::new();
         pcm_setup(&mut a, 0, 1, 48000);
         set_echo(&mut a, 1 << 12, 0, 64, 127);
         a.write(KEYON_ADDR, 0x1C);
         run_frame(&mut a, &mem);
-        assert!(a.frame[2..].iter().all(|&s| s == 0), "delay 0 must disable the echo path");
+        assert!(
+            a.frame[2..].iter().all(|&s| s == 0),
+            "delay 0 must disable the echo path"
+        );
 
-        // delay set but channel not sent
         let mut b = Apu::new();
         pcm_setup(&mut b, 0, 1, 48000);
         set_echo(&mut b, 0, 1, 64, 127);
         b.write(KEYON_ADDR, 0x1C);
         run_frame(&mut b, &mem);
-        assert!(b.frame[2..].iter().all(|&s| s == 0), "unsent channel leaked into the echo bus");
+        assert!(
+            b.frame[2..].iter().all(|&s| s == 0),
+            "unsent channel leaked into the echo bus"
+        );
     }
 
     #[test]
     fn a_dark_fir_set_attenuates_the_repeat_vs_identity() {
-        let dark: [i8; 8] = [58, 30, 20, 10, 5, 2, 1, 1]; // lowpass-ish, sums < 128
+        let dark: [i8; 8] = [58, 30, 20, 10, 5, 2, 1, 1];
         let run = |fir: Option<&[i8; 8]>| {
             let mut mem = vec![0u8; 16];
             mem[0] = 0x7F;
@@ -510,7 +504,10 @@ mod tests {
             a.frame[192 * 2]
         };
 
-        assert!(run(Some(&dark)) < run(None), "FIR taps had no effect on the repeat");
+        assert!(
+            run(Some(&dark)) < run(None),
+            "FIR taps had no effect on the repeat"
+        );
     }
 
     #[test]
@@ -520,12 +517,15 @@ mod tests {
 
         let mut a = Apu::new();
         pcm_setup(&mut a, 0, 1, 48000);
-        set_echo(&mut a, 1 << 12, 100, 100, 127); // long tail
+        set_echo(&mut a, 1 << 12, 100, 100, 127);
         a.write(KEYON_ADDR, 0x1C);
         run_frame(&mut a, &mem);
 
         a.reset();
         run_frame(&mut a, &[]);
-        assert!(a.frame.iter().all(|&s| s == 0), "reset left echo history ringing");
+        assert!(
+            a.frame.iter().all(|&s| s == 0),
+            "reset left echo history ringing"
+        );
     }
 }
