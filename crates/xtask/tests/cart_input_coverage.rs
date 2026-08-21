@@ -120,8 +120,8 @@ fn bump_forces_rebuild(case: &str, bumped_rel: &str, diagnosis: &str) {
 fn devkit_header_change_forces_a_cart_rebuild() {
     bump_forces_rebuild(
         "cart_input_coverage_devkit",
-        "devkit/vega68_hw.h",
-        "build_cart did not rebuild a cart with a newer devkit/vega68_hw.h — \
+        "devkit/v68.h",
+        "build_cart did not rebuild a cart with a newer devkit/v68.h — \
          the devkit glob dropped out of build_cart's tracked input set",
     );
 }
@@ -140,8 +140,8 @@ fn bios_sym_change_forces_a_cart_rebuild() {
 fn devkit_source_change_forces_a_cart_rebuild() {
     bump_forces_rebuild(
         "cart_input_coverage_devkit_src",
-        "devkit/vega68_sfx.c",
-        "build_cart did not rebuild a cart with a newer devkit/vega68_sfx.c — \
+        "devkit/afx.c",
+        "build_cart did not rebuild a cart with a newer devkit/afx.c — \
          the devkit source glob dropped out of build_cart's tracked input set",
     );
 }

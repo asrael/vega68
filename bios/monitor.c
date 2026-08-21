@@ -1,5 +1,5 @@
 #include "bios.h"
-#include "vega68_hw.h"
+#include "gfx.h"
 
 #define DEBOUNCE 20000
 #define WINDOW   16

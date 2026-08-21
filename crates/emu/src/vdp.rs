@@ -27,17 +27,17 @@ pub fn mode(mem: &[u8]) -> (usize, usize) {
 pub fn render(mem: &[u8], brightness: u8, out: &mut [u32]) {
     let (w, h) = mode(mem);
     let zoom = w / WIDTH;
-    let tpu_plane = be16(mem, VDP_MODE as usize) & 2 != 0;
+    let fb_plane = be16(mem, VDP_MODE as usize) & 2 != 0;
 
     assert!(out.len() >= w * h);
 
     out[..w * h].fill(palette(mem, 0));
 
-    if tpu_plane {
+    if fb_plane {
         paint_framebuffer(mem, w, h, out);
     }
 
-    let plane_start = if tpu_plane { 1 } else { 0 };
+    let plane_start = if fb_plane { 1 } else { 0 };
 
     for n in plane_start..TILEMAP_PLANES {
         paint_plane(mem, n, false, zoom, out);
@@ -469,7 +469,7 @@ mod tests {
     }
 
     #[test]
-    fn tpu_plane_suppresses_plane_zero_both_priorities() {
+    fn fb_plane_suppresses_plane_zero_both_priorities() {
         let mut m = vec![0u8; MEM_END as usize];
         set_palette(&mut m, 0, 0x0010_2030);
         set_palette(&mut m, 1, 0x00AA_BBCC);
@@ -490,12 +490,12 @@ mod tests {
         let backdrop = 0x0010_2030;
         assert_eq!(
             out[0], backdrop,
-            "plane 0 lo must not paint while TPU_PLANE is set"
+            "plane 0 lo must not paint while MODE_FB is set"
         );
         assert_eq!(
             out[40 * WIDTH + 40],
             backdrop,
-            "plane 0 hi must not paint while TPU_PLANE is set"
+            "plane 0 hi must not paint while MODE_FB is set"
         );
     }
 }

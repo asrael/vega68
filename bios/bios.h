@@ -1,7 +1,7 @@
 #ifndef V68_BIOS_H
 #define V68_BIOS_H
 
-#include "vega68_hw.h"
+#include "sys.h"
 
 #define V68_CART_RAM 0x02020000
 #define V68_RAM_END  0x02400000

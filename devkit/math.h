@@ -1,7 +1,7 @@
 #ifndef V68_MATH_H
 #define V68_MATH_H
 
-#include "vega68_hw.h"
+#include "v68_types.h"
 
 static inline i32 v68_divs(i64 n, i32 d) {
     i32 hi = (i32)(n >> 32);

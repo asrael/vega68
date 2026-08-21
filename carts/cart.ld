@@ -9,7 +9,7 @@ MEMORY {
 SECTIONS {
   .v68hdr : { KEEP(*(.v68hdr)) } > ROM
 
-  INCLUDE vega68_sections.ld
+  INCLUDE sections.ld
 
   .noinit (NOLOAD) : { *(.noinit*) } > RAM
 }

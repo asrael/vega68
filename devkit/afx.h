@@ -1,7 +1,18 @@
-#ifndef V68_SFX_H
-#define V68_SFX_H
+#ifndef V68_AFX_H
+#define V68_AFX_H
 
-#include "vega68_hw.h"
+#include "sys.h"
+
+#define V68_AUDIO_CH(n)  ((volatile u8 *)(0xFF000400 + (n) * 0x40))
+#define V68_AUDIO_KEYON  ((volatile u8 *)0xFF000800)
+#define V68_AUDIO_LFO    ((volatile u8 *)0xFF000801)
+#define V68_AUDIO_STATUS ((volatile u16 *)0xFF000802)
+#define V68_AUDIO_ESEND  ((volatile u16 *)0xFF000810)
+#define V68_AUDIO_EDELAY ((volatile u8 *)0xFF000812)
+#define V68_AUDIO_EFB    ((volatile u8 *)0xFF000813)
+#define V68_AUDIO_EVOL_L ((volatile u8 *)0xFF000814)
+#define V68_AUDIO_EVOL_R ((volatile u8 *)0xFF000815)
+#define V68_AUDIO_EFIR   ((volatile u8 *)0xFF000816)
 
 #define V68_SOUND_POOL 2048
 

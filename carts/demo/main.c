@@ -1,5 +1,4 @@
-#include "vega68_hw.h"
-#include "vega68_sfx.h"
+#include "v68.h"
 
 #define BG_TILE     5
 #define BRIGHT_STEP 4

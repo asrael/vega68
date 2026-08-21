@@ -1,4 +1,4 @@
-#include "vega68_hw.h"
+#include "v68.h"
 
 #define FIRE_COUNT 4
 #define FIRST_LINE 5

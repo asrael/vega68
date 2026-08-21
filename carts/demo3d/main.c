@@ -1,5 +1,5 @@
-#include "vega68_gfx.h"
-#include "vega68_math.h"
+#include "gfx.h"
+#include "math.h"
 
 #define RING_OFF   0x000100
 #define RING_WORDS 2048
@@ -257,7 +257,7 @@ void main(void) {
 
     build_tables();
     v68_3d_init(RING_OFF, RING_WORDS, FB0_OFF, Z_OFF, W, H);
-    v68_3d_mode(1, 1);
+    v68_mode(1, 1);
     v68_irq_init();
     v68_vblank_enable();
     v68_wait_vblank();
@@ -268,7 +268,7 @@ void main(void) {
         update();
         draw(tex, back);
 
-        v68_3d_fb(back);
+        v68_fb(back);
         front = !front;
 
         if (printed < 4) {

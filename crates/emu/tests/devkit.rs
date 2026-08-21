@@ -118,7 +118,7 @@ fn tpu_devkit_rasterises_two_triangles_and_the_frame_matches_the_golden() {
     assert_eq!(
         vdp::mode(&sys.bus.mem),
         (vdp::WIDTH, vdp::HEIGHT),
-        "fixture must display through lo-res + TPU_PLANE"
+        "fixture must display through lo-res + MODE_FB"
     );
 
     let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];

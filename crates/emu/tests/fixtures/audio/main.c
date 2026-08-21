@@ -1,4 +1,4 @@
-#include "vega68_hw.h"
+#include "v68.h"
 
 void main(void) {
     volatile u8 *ch = V68_AUDIO_CH(0);

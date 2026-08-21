@@ -1,4 +1,4 @@
-#include "vega68_gfx.h"
+#include "gfx.h"
 
 #define RING_OFF   0x000100
 #define RING_WORDS 256
@@ -84,8 +84,8 @@ void main(void) {
     puthex32((u32)*V68_TPU_PIXELS_HI << 16 | *V68_TPU_PIXELS_LO);
     *V68_DEBUG_PUTC = '\n';
 
-    v68_3d_fb(COLOR_OFF);
-    v68_3d_mode(0, 1);
+    v68_fb(COLOR_OFF);
+    v68_mode(0, 1);
     v68_wait_vblank();
 
     v68_puts("ok\n");

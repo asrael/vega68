@@ -1,4 +1,4 @@
-#include "vega68_hw.h"
+#include "v68.h"
 
 static u32 sentinel __attribute__((section(".noinit")));
 

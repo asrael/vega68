@@ -1,4 +1,4 @@
-#include "vega68_hw.h"
+#include "v68.h"
 
 V68_INTERRUPT static void on_line(void) {
     *V68_IRQ_ACK = V68_IRQ_LINE;

@@ -1,4 +1,4 @@
-#include "vega68_gfx.h"
+#include "gfx.h"
 
 static u32 ring;
 static u32 ring_mask;
@@ -62,12 +62,12 @@ void v68_3d_wait(void) {
     while (*V68_TPU_STATUS & V68_TPU_BUSY) {}
 }
 
-void v68_3d_fb(u32 fb_off) {
+void v68_fb(u32 fb_off) {
     *V68_FB_BASE = fb_off;
 }
 
-void v68_3d_mode(i32 hires, i32 tpu_plane) {
-    *V68_VDP_MODE = (hires ? V68_MODE_HIRES : 0) | (tpu_plane ? V68_MODE_TPU_PLANE : 0);
+void v68_mode(i32 hires, i32 fb) {
+    *V68_VDP_MODE = (hires ? V68_MODE_HIRES : 0) | (fb ? V68_MODE_FB : 0);
 }
 
 void v68_2d_sprite(i32 i, i32 x, i32 y, u16 ctrl, u16 attr) {

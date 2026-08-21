@@ -52,9 +52,15 @@ fn repo_file(name: &str) -> String {
     std::fs::read_to_string(path).unwrap_or_else(|e| panic!("{name}: {e}"))
 }
 
+fn devkit_headers() -> String {
+    ["devkit/sys.h", "devkit/gfx.h", "devkit/afx.h"]
+        .map(repo_file)
+        .join("\n")
+}
+
 #[test]
 fn header_matches_emulator_abi() {
-    let header = repo_file("devkit/vega68_hw.h");
+    let header = devkit_headers();
 
     #[rustfmt::skip]
     let defines: Vec<(&str, String)> = vec![
@@ -73,11 +79,11 @@ fn header_matches_emulator_abi() {
         let line = header
             .lines()
             .find(|l| l.starts_with("#define") && l.split_whitespace().nth(1) == Some(name))
-            .unwrap_or_else(|| panic!("vega68_hw.h: missing #define {name}"));
+            .unwrap_or_else(|| panic!("devkit: missing #define {name}"));
 
         assert!(
             line.to_uppercase().contains(&value.to_uppercase()),
-            "vega68_hw.h: {name} disagrees with emulator ({line} vs {value})"
+            "devkit: {name} disagrees with emulator ({line} vs {value})"
         );
     }
 }
@@ -144,7 +150,7 @@ fn header_mmio_defines(header: &str) -> BTreeMap<String, u32> {
 #[test]
 fn mmio_block_is_exhaustive() {
     let bus_src = repo_file("crates/emu/src/bus.rs");
-    let header = repo_file("devkit/vega68_hw.h");
+    let header = devkit_headers();
 
     let rust = bus_mmio_consts(&bus_src);
     let mut hdr = header_mmio_defines(&header);
@@ -154,24 +160,24 @@ fn mmio_block_is_exhaustive() {
     for (name, value) in &rust {
         let hval = hdr
             .remove(name)
-            .unwrap_or_else(|| panic!("vega68_hw.h: missing #define V68_{name}"));
+            .unwrap_or_else(|| panic!("devkit: missing #define V68_{name}"));
 
         assert_eq!(
             hval, *value,
-            "V68_{name} disagrees between bus.rs ({value:#010X}) and vega68_hw.h ({hval:#010X})"
+            "V68_{name} disagrees between bus.rs ({value:#010X}) and devkit ({hval:#010X})"
         );
     }
 
     assert!(
         hdr.is_empty(),
-        "vega68_hw.h defines MMIO registers with no Rust const: {:?}",
+        "devkit defines MMIO registers with no Rust const: {:?}",
         hdr.keys().collect::<Vec<_>>()
     );
 }
 
 #[test]
 fn vblank_and_line_mask_invariants() {
-    let header = repo_file("devkit/vega68_hw.h");
+    let header = devkit_headers();
 
     let vblank = header_const(&header, "V68_VBLANK");
     let line_mask = header_const(&header, "V68_LINE_MASK");
@@ -190,7 +196,7 @@ fn vblank_and_line_mask_invariants() {
 
 #[test]
 fn header_sizes_match_emulator_abi() {
-    let header = repo_file("devkit/vega68_hw.h");
+    let header = devkit_headers();
 
     let sizes: Vec<(&str, u32)> = vec![
         ("V68_VRAM_SIZE", bus::VRAM_SIZE),
@@ -213,14 +219,14 @@ fn header_sizes_match_emulator_abi() {
         assert_eq!(
             header_const(&header, name),
             value,
-            "vega68_hw.h: {name} disagrees with emulator"
+            "devkit: {name} disagrees with emulator"
         );
     }
 }
 
 #[test]
 fn tpu_command_encoding_matches_emulator_abi() {
-    let header = repo_file("devkit/vega68_hw.h");
+    let header = devkit_headers();
     let tpu_src = repo_file("crates/emu/src/tpu.rs");
 
     let pins: Vec<(&str, &str)> = vec![
@@ -240,14 +246,14 @@ fn tpu_command_encoding_matches_emulator_abi() {
         assert_eq!(
             header_const(&header, define),
             rust_const(&tpu_src, name),
-            "vega68_hw.h: {define} disagrees with tpu.rs's {name}"
+            "devkit: {define} disagrees with tpu.rs's {name}"
         );
     }
 
     assert_eq!(
         header_const(&header, "V68_TPU_BUSY"),
         bus::TPU_BUSY as u32,
-        "vega68_hw.h: V68_TPU_BUSY disagrees with bus::TPU_BUSY"
+        "devkit: V68_TPU_BUSY disagrees with bus::TPU_BUSY"
     );
 }
 
@@ -300,9 +306,9 @@ fn tpu_state_block_offsets_match_emulator_abi() {
 
 #[test]
 fn vdp_mode_bits_match_emulator_abi() {
-    let header = repo_file("devkit/vega68_hw.h");
+    let header = devkit_headers();
     let hires = header_const(&header, "V68_MODE_HIRES") as u16;
-    let tpu_plane = header_const(&header, "V68_MODE_TPU_PLANE") as u16;
+    let fb = header_const(&header, "V68_MODE_FB") as u16;
     let mut mem = vec![0u8; bus::MEM_END as usize];
 
     mem[bus::PALETTE_BASE as usize + 4..][..4].copy_from_slice(&0x00AB_CDEFu32.to_be_bytes());
@@ -315,18 +321,18 @@ fn vdp_mode_bits_match_emulator_abi() {
         "V68_MODE_HIRES is not the bit that doubles the output resolution"
     );
 
-    mem[bus::VDP_MODE as usize..][..2].copy_from_slice(&tpu_plane.to_be_bytes());
+    mem[bus::VDP_MODE as usize..][..2].copy_from_slice(&fb.to_be_bytes());
     let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
     vdp::render(&mem, 255, &mut out);
 
     assert_eq!(
         vdp::mode(&mem),
         (vdp::WIDTH, vdp::HEIGHT),
-        "V68_MODE_TPU_PLANE must not change the output resolution"
+        "V68_MODE_FB must not change the output resolution"
     );
     assert_eq!(
         out[0], 0x00AB_CDEF,
-        "V68_MODE_TPU_PLANE is not the bit that paints the framebuffer plane"
+        "V68_MODE_FB is not the bit that paints the framebuffer plane"
     );
 }
 
@@ -350,7 +356,7 @@ fn bios_ram_bounds_match_emulator_abi() {
 
 #[test]
 fn header_pad_bits_match_emulator_abi() {
-    let header = repo_file("devkit/vega68_hw.h");
+    let header = devkit_headers();
 
     let bits: Vec<(&str, u16)> = vec![
         ("V68_PAD_UP", bus::PAD_UP),
@@ -371,7 +377,7 @@ fn header_pad_bits_match_emulator_abi() {
         assert_eq!(
             header_const(&header, name),
             *value as u32,
-            "vega68_hw.h: {name} disagrees with emulator"
+            "devkit: {name} disagrees with emulator"
         );
     }
 

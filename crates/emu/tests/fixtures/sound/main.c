@@ -1,4 +1,4 @@
-#include "vega68_sfx.h"
+#include "afx.h"
 
 static const V68Patch ping = {
     .op = { { 0x01, 0, 0x1F, 0, 0, 0x05, 0 },

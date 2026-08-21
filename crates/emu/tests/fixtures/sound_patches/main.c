@@ -1,4 +1,4 @@
-#include "vega68_sfx.h"
+#include "afx.h"
 
 static void putdec(u32 v) {
     if (v >= 10)

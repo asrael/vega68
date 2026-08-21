@@ -1,4 +1,4 @@
-#include "vega68_hw.h"
+#include "v68.h"
 
 void v68_vblank_hook(void) {
     *V68_DEBUG_PUTC = '!';

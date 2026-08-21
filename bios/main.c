@@ -1,5 +1,5 @@
 #include "bios.h"
-#include "vega68_hw.h"
+#include "sys.h"
 
 #define V68_CART  ((volatile u8 *)0x01000000)
 #define V68_MAGIC 0x56363800

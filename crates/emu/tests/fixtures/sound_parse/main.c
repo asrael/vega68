@@ -1,4 +1,4 @@
-#include "vega68_sfx.h"
+#include "afx.h"
 
 static const char *tricky[] = { "a2@3 [c3 [d3 e3]] ~ -", "- b2 ~ ~" };
 static const V68Track t_ok[] = { { tricky, 2, 0, 0, 0 } };

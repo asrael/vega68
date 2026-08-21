@@ -11,7 +11,7 @@ __stack_top = ORIGIN(RAM) + LENGTH(RAM);
 SECTIONS {
   .vectors : { KEEP(*(.vectors)) . = 0x400; } > ROM
 
-  INCLUDE vega68_sections.ld
+  INCLUDE sections.ld
 
   .noinit (NOLOAD) : {
     . = ALIGN(4);

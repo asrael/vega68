@@ -1,4 +1,4 @@
-#include "vega68_sfx.h"
+#include "afx.h"
 
 #define V68_SOUND_MAX_TRACKS  64
 #define V68_GROUP_MAX         32
