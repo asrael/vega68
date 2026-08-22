@@ -221,10 +221,15 @@ impl Apu {
                     if ssg_active {
                         shift = shift.saturating_sub(2);
                     }
-                    if self.eg_counter & ((1 << shift) - 1) != 0 {
+                    // spread over finer firings: same rate, steps too small to zipper
+                    let fine = shift.saturating_sub(2);
+                    if self.eg_counter & ((1 << fine) - 1) != 0 {
                         continue;
                     }
-                    4 + (r & 3)
+                    let spread = 1u16 << (shift - fine);
+                    let sub = self.eg_counter >> fine & (spread as u32 - 1);
+                    let total = 4 + (r & 3);
+                    total / spread + u16::from(sub < (total % spread) as u32)
                 } else {
                     let mut inc = (4 + (r & 3)) << ((r >> 2) - 11);
                     if ssg_active {
@@ -370,12 +375,16 @@ impl Apu {
             (ssg & 0x08 != 0, invert)
         });
 
-        for (op, eg) in self.fm[ch].env.iter_mut().enumerate() {
+        let chan = &mut self.fm[ch];
+
+        for op in 0..4 {
+            let eg = &mut chan.env[op];
+
             if mask & (0x10 << op) != 0 {
-                eg.att = 1023;
                 eg.phase = Phase::Attack;
                 eg.ssg_held = false;
                 eg.ssg_inv = ssg_init[op].0 && ssg_init[op].1;
+                chan.phase[op] = 0.0;
             } else {
                 eg.phase = Phase::Release;
             }
@@ -454,6 +463,91 @@ mod tests {
         a.write(KEYON_ADDR, 0xF0);
 
         assert_eq!(cycles_per_second(&mut a), 440);
+    }
+
+    #[test]
+    fn sustain_decay_moves_in_steps_too_small_to_zipper() {
+        let mut a = Apu::new();
+
+        fm_setup(&mut a, 0, 7, 1083, 1);
+        a.write(FM_OP_OFFSET[0] + 4, 0x04);
+        a.write(0x05, 0x0F);
+        a.write(KEYON_ADDR, 0x10);
+
+        run_frame(&mut a, &[]);
+        a.fm[0].env[0].phase = Phase::Sustain;
+
+        let mut max_step = 0u16;
+        let mut prev = a.fm[0].env[0].att;
+
+        for _ in 0..200_000 {
+            a.eg_tick();
+            let att = a.fm[0].env[0].att;
+            max_step = max_step.max(att - prev);
+            prev = att;
+        }
+
+        assert!(prev > 0, "sustain decay never moved");
+        assert!(
+            max_step <= 2,
+            "envelope stepped {max_step} att units at once (audible zipper)"
+        );
+    }
+
+    #[test]
+    fn keyon_resets_the_phase_so_a_note_starts_at_the_zero_crossing() {
+        let mut a = Apu::new();
+
+        fm_setup(&mut a, 0, 7, 1083, 4);
+        a.write(0x05, 0x0F);
+        a.write(KEYON_ADDR, 0x10);
+
+        run_frame(&mut a, &[]);
+        let loud = peak_i(&a.frame);
+
+        a.run_line(&[], 0);
+        a.frame.clear();
+        a.write(KEYON_ADDR, 0x10);
+        a.run_line(&[], 1);
+
+        let first = a.frame[0].unsigned_abs() as i16;
+
+        assert!(
+            first < loud / 8,
+            "re-keyed note stepped to {first} in one sample (full level {loud})"
+        );
+    }
+
+    #[test]
+    fn rekey_attacks_from_the_current_level_instead_of_snapping_to_silence() {
+        let mut a = Apu::new();
+
+        fm_setup(&mut a, 0, 7, 1083, 4);
+        a.write(0x05, 0x0F);
+        a.write(KEYON_ADDR, 0x10);
+
+        for _ in 0..3 {
+            run_frame(&mut a, &[]);
+        }
+
+        let before = a.fm[0].env[0].att;
+        assert!(before < 100, "channel never reached full level: att {before}");
+
+        let loud = peak_i(&a.frame);
+        a.write(KEYON_ADDR, 0x10);
+
+        assert!(
+            a.fm[0].env[0].att <= before,
+            "re-key snapped the envelope from {before} to {}",
+            a.fm[0].env[0].att
+        );
+
+        run_frame(&mut a, &[]);
+        assert!(
+            peak_i(&a.frame) > loud / 2,
+            "re-key clicked: peak fell from {loud} to {}",
+            peak_i(&a.frame)
+        );
     }
 
     #[test]
@@ -691,6 +785,10 @@ mod tests {
         a.write(0x40 + 0x28, 0x04);
         a.write(0x1F, 0x00);
         a.write(KEYON_ADDR, 0xF0);
+        // key out of phase: an in-phase product never crosses zero
+        for line in 0..7 {
+            a.run_line(&[], line);
+        }
         a.write(KEYON_ADDR, 0xF1);
 
         assert_eq!(

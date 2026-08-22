@@ -1,5 +1,5 @@
 use vega68::System;
-use vega68::apu::out::AudioOut;
+use vega68::apu::out::{AudioOut, QUEUE_TARGET};
 use vega68::bus;
 use vega68::vdp::{HEIGHT, WIDTH};
 
@@ -375,8 +375,14 @@ impl Vega68 {
 impl ApplicationHandler for Vega68 {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
+        // The audio device is the master clock; the wall clock paces only
+        // silent runs, and backstops a stalled stream.
+        let due = match &self.audio {
+            Some(a) => a.queued() <= QUEUE_TARGET || now >= self.next_frame + 4 * FRAME,
+            None => now >= self.next_frame,
+        };
 
-        if now >= self.next_frame {
+        if due {
             if let Some(w) = &mut self.watch {
                 w.poll(&mut self.sys);
             }
@@ -401,7 +407,11 @@ impl ApplicationHandler for Vega68 {
             }
         }
 
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.next_frame));
+        let wake = match &self.audio {
+            Some(_) => now + FRAME / 8,
+            None => self.next_frame,
+        };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 
     fn resumed(&mut self, event_loop: &ActiveEventLoop) {

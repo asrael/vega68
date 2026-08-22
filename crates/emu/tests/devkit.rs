@@ -44,7 +44,7 @@ fn sound_devkit_plays_a_two_bar_song_and_the_mix_matches_the_golden() {
     );
     assert_eq!(
         fnv1a64(&sys.bus.apu.frame),
-        0x172a_84ff_bae3_227d,
+        0xfc7c_9e33_2281_86c5,
         "sound frame drifted from the golden"
     );
 }

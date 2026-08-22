@@ -3,6 +3,8 @@ use std::sync::{Arc, Mutex};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+pub const QUEUE_TARGET: usize = 1600;
+
 const CAPACITY: usize = 6400;
 
 fn find_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
@@ -85,6 +87,10 @@ impl AudioOut {
     pub fn push(&self, samples: &[i16]) {
         self.ring.push(samples);
     }
+
+    pub fn queued(&self) -> usize {
+        self.ring.queued()
+    }
 }
 
 #[derive(Clone)]
@@ -124,6 +130,10 @@ impl Ring {
         let over = buf.len().saturating_sub(self.capacity);
         let over = over + (over & 1);
         buf.drain(..over);
+    }
+
+    fn queued(&self) -> usize {
+        self.buf.lock().unwrap().len() / 2
     }
 }
 
@@ -176,6 +186,15 @@ mod tests {
         ring.pop_slice(&mut out);
 
         assert_eq!(out, [1, 2, 3, 0, 0]);
+    }
+
+    #[test]
+    fn queued_counts_stereo_frames_not_samples() {
+        let ring = Ring::new(8);
+
+        ring.push(&[1, 2, 3, 4]);
+
+        assert_eq!(ring.queued(), 2);
     }
 
     #[test]
