@@ -1,89 +1,69 @@
 #include "gfx.h"
 
-static u32 ring;
-static u32 ring_mask;
-static u16 tail;
+static u32 canvas_base;
 
-static void st32(u32 off, u32 v) {
-    *(volatile u32 *)(V68_TPU_RAM + off) = v;
-}
+void v68_canvas(i32 plane, i32 tile_base) {
+    canvas_base = (u32)tile_base * 64;
 
-static void push(u32 w) {
-    st32(ring + (u32)(tail & ring_mask) * 4, w);
-    tail++;
-}
-
-void v68_3d_init(u32 ring_off, u32 ring_words, u32 color_off, u32 z_off, u16 w, u16 h) {
-    V68_TPU_STATE->ring_base = ring_off;
-    V68_TPU_STATE->ring_words = ring_words;
-    V68_TPU_STATE->color_base = color_off;
-    V68_TPU_STATE->z_base = z_off;
-    V68_TPU_STATE->width = w;
-    V68_TPU_STATE->height = h;
-
-    ring = ring_off;
-    ring_mask = ring_words - 1;
-    tail = *V68_TPU_HEAD;
-}
-
-void v68_3d_fill(u16 x0, u16 y0, u16 x1, u16 y1, u8 flags, u8 color, u16 z) {
-    push((u32)V68_TPU_OP_FILL << 24 | flags);
-    push((u32)x0 << 16 | y0);
-    push((u32)x1 << 16 | y1);
-    push(color);
-    push(z);
-}
-
-void v68_3d_tri(u32 w0, u32 w1, u32 cmap_off, u32 blend_off, const V68Vert *a,
-                const V68Vert *b, const V68Vert *c) {
-    const V68Vert *vs[3] = { a, b, c };
-
-    push(w0);
-    push(w1);
-    push(cmap_off);
-    push(blend_off);
-
-    for (i32 i = 0; i < 3; i++) {
-        push((u32)vs[i]->x);
-        push((u32)vs[i]->y);
-        push((u32)vs[i]->z);
-        push((u32)vs[i]->uq);
-        push((u32)vs[i]->vq);
-        push((u32)vs[i]->q);
-        push((u32)vs[i]->shade);
+    for (i32 r = 0; r < V68_CANVAS_ROWS; r++) {
+        for (i32 c = 0; c < V68_CANVAS_COLS; c++) {
+            V68_TILEMAPS[plane].cell[r][c] = (u16)(tile_base + r * V68_CANVAS_COLS + c);
+        }
     }
 }
 
-void v68_3d_submit(void) {
-    *V68_TPU_TAIL = tail;
+void v68_fill(i32 x, i32 y, i32 w, i32 h, u8 color) {
+    u32 quad = (u32)color * 0x01010101;
+    i32 x1 = x + w;
+    i32 y1 = y + h;
+
+    for (i32 cy = y >> 3; cy <= (y1 - 1) >> 3; cy++) {
+        i32 r0 = cy == y >> 3 ? y & 7 : 0;
+        i32 r1 = cy == (y1 - 1) >> 3 ? ((y1 - 1) & 7) + 1 : 8;
+
+        for (i32 cx = x >> 3; cx <= (x1 - 1) >> 3; cx++) {
+            i32 c0 = cx == x >> 3 ? x & 7 : 0;
+            i32 c1 = cx == (x1 - 1) >> 3 ? ((x1 - 1) & 7) + 1 : 8;
+            volatile u8 *cell = V68_VRAM + canvas_base + ((u32)cy * V68_CANVAS_COLS + cx) * 64;
+
+            if (c0 == 0 && c1 == 8) {
+                volatile u32 *q = (volatile u32 *)(cell + r0 * 8);
+
+                for (i32 n = (r1 - r0) * 2; n > 0; n--) {
+                    *q++ = quad;
+                }
+            } else {
+                for (i32 r = r0; r < r1; r++) {
+                    for (i32 c = c0; c < c1; c++) {
+                        cell[r * 8 + c] = color;
+                    }
+                }
+            }
+        }
+    }
 }
 
-void v68_3d_wait(void) {
-    while (*V68_TPU_STATUS & V68_TPU_BUSY) {}
+void v68_palette(i32 i, u32 rgb) {
+    V68_PALETTE[i] = rgb;
 }
 
-void v68_fb(u32 fb_off) {
-    *V68_FB_BASE = fb_off;
+volatile u8 *v68_pixel(i32 x, i32 y) {
+    return &V68_VRAM[canvas_base + ((u32)(y >> 3) * V68_CANVAS_COLS + (u32)(x >> 3)) * 64
+                     + (u32)((y & 7) * 8 + (x & 7))];
 }
 
-void v68_mode(i32 hires, i32 fb) {
-    *V68_VDP_MODE = (hires ? V68_MODE_HIRES : 0) | (fb ? V68_MODE_FB : 0);
-}
-
-void v68_2d_sprite(i32 i, i32 x, i32 y, u16 ctrl, u16 attr) {
-    volatile V68Sprite *s = &V68_SPRITES[i];
-
-    s->x = (i16)x;
-    s->y = (i16)y;
-    s->ctrl = ctrl;
-    s->attr = attr;
-}
-
-void v68_2d_scroll(i32 plane, u16 h, u16 v) {
+void v68_scroll(i32 plane, u16 h, u16 v) {
     V68_SCROLL->plane[plane].h = h;
     V68_SCROLL->plane[plane].v = v;
 }
 
-void v68_2d_palette(i32 i, u32 rgb) {
-    V68_PALETTE[i] = rgb;
+void v68_sprite(i32 i, V68SpriteDesc desc) {
+    volatile V68Sprite *s = &V68_SPRITES[i];
+    i32 w = desc.w ? desc.w : 8;
+    i32 h = desc.h ? desc.h : 8;
+
+    s->x = desc.x;
+    s->y = desc.y;
+    s->ctrl = (desc.off ? 0 : 0x8000) | desc.flags | desc.tile;
+    s->attr = (u16)(desc.pal << 8 | (h / 8 - 1) << 3 | (w / 8 - 1));
 }

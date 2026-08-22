@@ -1,6 +1,6 @@
 mod common;
 
-use common::{assert_cart, build, fnv1a64, fnv1a64_pixels, run_until};
+use common::{assert_cart, build, fnv1a64, run_until};
 use vega68::bus::VRAM_BASE;
 use vega68::{System, vdp};
 
@@ -110,25 +110,46 @@ fn sound_patches_devkit_keys_all_twelve_presets_audible_and_distinct() {
 }
 
 #[test]
-fn tpu_devkit_rasterises_two_triangles_and_the_frame_matches_the_golden() {
-    let Some(sys) = assert_cart("tpu", "00007bde\nok\n") else {
+fn canvas_devkit_plots_pixels_through_the_tile_swizzle() {
+    let Some(sys) = assert_cart("canvas", "ok\n") else {
         return;
     };
-
-    assert_eq!(
-        vdp::mode(&sys.bus.mem),
-        (vdp::WIDTH, vdp::HEIGHT),
-        "fixture must display through lo-res + MODE_FB"
-    );
 
     let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
     sys.render(&mut out);
 
+    assert_eq!(out[0], 0x00FF_0000, "plot at (0,0) never reached the frame");
     assert_eq!(
-        fnv1a64_pixels(&out),
-        0x8aaa_8af3_619e_c60a,
-        "rendered frame drifted from the golden"
+        out[179 * vdp::WIDTH + 319],
+        0x0000_FF00,
+        "plot at (319,179) never reached the frame"
     );
+
+    for i in 0..32 {
+        assert_eq!(
+            out[(4 + i) * vdp::WIDTH + 4 + i],
+            0x0000_00FF,
+            "diagonal broke crossing a cell boundary at step {i}"
+        );
+    }
+
+    for (x, y) in [(100, 50), (129, 50), (100, 69), (129, 69), (115, 60)] {
+        assert_eq!(
+            out[y * vdp::WIDTH + x],
+            0x00FF_FF00,
+            "fill missed ({x},{y}) inside its rect"
+        );
+    }
+
+    for (x, y) in [(99, 50), (130, 50), (100, 49), (100, 70)] {
+        assert_eq!(
+            out[y * vdp::WIDTH + x],
+            0,
+            "fill bled to ({x},{y}) outside its rect"
+        );
+    }
+
+    assert_eq!(out[1], 0, "an unplotted pixel lost the backdrop");
 }
 
 #[test]

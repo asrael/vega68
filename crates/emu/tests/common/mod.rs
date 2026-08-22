@@ -56,10 +56,6 @@ pub fn fnv1a64(frame: &[i16]) -> u64 {
     vega68::fnv1a64(frame.iter().flat_map(|s| s.to_le_bytes()))
 }
 
-pub fn fnv1a64_pixels(frame: &[u32]) -> u64 {
-    vega68::fnv1a64(frame.iter().flat_map(|p| p.to_le_bytes()))
-}
-
 pub fn run_until(sys: &mut System, from: usize, needle: &str) {
     let want = needle.as_bytes();
 

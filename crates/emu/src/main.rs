@@ -1,7 +1,6 @@
 use vega68::System;
 use vega68::apu::out::AudioOut;
 use vega68::bus;
-use vega68::vdp;
 use vega68::vdp::{HEIGHT, WIDTH};
 
 use std::num::NonZeroU32;
@@ -104,12 +103,6 @@ fn run_headless(mut sys: System, frames: u64, mut watch: Option<Watch>) {
         }
 
         sys.run_frame();
-
-        let (w, h) = vdp::mode(&sys.bus.mem);
-        if frame.len() != w * h {
-            frame = vec![0u32; w * h];
-        }
-
         sys.render(&mut frame);
         println!(
             "frame {i} {:016x}",
@@ -169,7 +162,6 @@ fn main() {
 struct Vega68 {
     audio: Option<AudioOut>,
     captured: bool,
-    dims: (usize, usize),
     frame: Vec<u32>,
     gamepad: u16,
     gilrs: Option<Gilrs>,
@@ -185,22 +177,10 @@ struct Vega68 {
     window: Option<Rc<Window>>,
 }
 
-#[cfg(test)]
 fn blit(frame: &[u32], out: &mut [u32], surface_w: usize, surface_h: usize) {
-    blit_for(frame, out, WIDTH, HEIGHT, surface_w, surface_h);
-}
-
-fn blit_for(
-    frame: &[u32],
-    out: &mut [u32],
-    w: usize,
-    h: usize,
-    surface_w: usize,
-    surface_h: usize,
-) {
-    let (scale, ox, oy) = fit_for(w, h, surface_w, surface_h);
-    let img_w = (w * scale).min(surface_w - ox);
-    let img_h = (h * scale).min(surface_h - oy);
+    let (scale, ox, oy) = fit(surface_w, surface_h);
+    let img_w = (WIDTH * scale).min(surface_w - ox);
+    let img_h = (HEIGHT * scale).min(surface_h - oy);
 
     out[..oy * surface_w].fill(0);
     out[(oy + img_h) * surface_w..].fill(0);
@@ -211,7 +191,7 @@ fn blit_for(
         row[..ox].fill(0);
         row[ox + img_w..].fill(0);
 
-        let src = &frame[(y / scale) * w..][..w];
+        let src = &frame[(y / scale) * WIDTH..][..WIDTH];
         let dst = &mut row[ox..][..img_w];
         let n_full = img_w / scale;
         let (chunked, tail) = dst.split_at_mut(n_full * scale);
@@ -226,15 +206,10 @@ fn blit_for(
     }
 }
 
-#[cfg(test)]
 fn fit(surface_w: usize, surface_h: usize) -> (usize, usize, usize) {
-    fit_for(WIDTH, HEIGHT, surface_w, surface_h)
-}
-
-fn fit_for(w: usize, h: usize, surface_w: usize, surface_h: usize) -> (usize, usize, usize) {
-    let scale = (surface_w / w).min(surface_h / h).max(1);
-    let ox = surface_w.saturating_sub(w * scale) / 2;
-    let oy = surface_h.saturating_sub(h * scale) / 2;
+    let scale = (surface_w / WIDTH).min(surface_h / HEIGHT).max(1);
+    let ox = surface_w.saturating_sub(WIDTH * scale) / 2;
+    let oy = surface_h.saturating_sub(HEIGHT * scale) / 2;
 
     (scale, ox, oy)
 }
@@ -281,7 +256,6 @@ fn run_windowed(sys: System, scale: Option<usize>, watch: Option<Watch>) {
     let mut vega68 = Vega68 {
         audio: AudioOut::new(),
         captured: false,
-        dims: (WIDTH, HEIGHT),
         frame: vec![0u32; WIDTH * HEIGHT],
         gamepad: 0,
         gilrs: Gilrs::new()
@@ -307,13 +281,6 @@ impl Vega68 {
         let Some(surface) = self.surface.as_mut() else {
             return;
         };
-        let dims = vdp::mode(&self.sys.bus.mem);
-
-        if dims != self.dims {
-            self.dims = dims;
-            self.frame = vec![0u32; dims.0 * dims.1];
-        }
-
         let mut buffer = surface
             .buffer_mut()
             .expect("failed to acquire surface buffer");
@@ -321,7 +288,7 @@ impl Vega68 {
         let h = buffer.height().get() as usize;
 
         self.sys.render(&mut self.frame);
-        blit_for(&self.frame, &mut buffer, dims.0, dims.1, w, h);
+        blit(&self.frame, &mut buffer, w, h);
 
         buffer.present().expect("failed to present frame");
     }

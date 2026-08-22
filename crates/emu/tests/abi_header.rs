@@ -1,4 +1,3 @@
-use vega68::tpu::{self, Tpu};
 use vega68::{bus, vdp};
 
 use std::collections::BTreeMap;
@@ -26,26 +25,6 @@ fn header_const(header: &str, name: &str) -> u32 {
         .product()
 }
 
-fn rust_const(src: &str, name: &str) -> u32 {
-    let line = src
-        .lines()
-        .find(|l| l.starts_with(&format!("const {name}:")))
-        .unwrap_or_else(|| panic!("missing const {name}"));
-
-    let value = line
-        .split_once('=')
-        .unwrap()
-        .1
-        .trim()
-        .trim_end_matches(';')
-        .trim();
-
-    match value.strip_prefix("0x") {
-        Some(hex) => u32::from_str_radix(&hex.replace('_', ""), 16).unwrap(),
-        None => value.parse().unwrap(),
-    }
-}
-
 fn repo_file(name: &str) -> String {
     let path = xtask::repo_root().unwrap().join(name);
 
@@ -69,10 +48,7 @@ fn header_matches_emulator_abi() {
         ("V68_TILEMAPS", format!("{:#010X}", bus::VRAM_BASE + 0x4_0000)),
         ("V68_SPRITES", format!("{:#010X}", bus::VRAM_BASE + 0x6_0000)),
         ("V68_SCROLL", format!("{:#010X}", bus::VRAM_BASE + 0x6_1000)),
-        ("V68_VDP_MODE", format!("{:#010X}", bus::VDP_MODE)),
-        ("V68_FB_BASE", format!("{:#010X}", bus::FB_BASE)),
         ("V68_PALETTE", format!("{:#010X}", bus::PALETTE_BASE)),
-        ("V68_TPU_RAM", format!("{:#010X}", bus::TPU_RAM_BASE)),
     ];
 
     for (name, value) in defines {
@@ -200,7 +176,6 @@ fn header_sizes_match_emulator_abi() {
 
     let sizes: Vec<(&str, u32)> = vec![
         ("V68_VRAM_SIZE", bus::VRAM_SIZE),
-        ("V68_TPU_RAM_SIZE", bus::TPU_RAM_SIZE),
         ("V68_PALETTE_SIZE", bus::PALETTE_SIZE / 4),
         ("V68_BRIGHTNESS_LEVELS", u8::MAX as u32 + 1),
         ("V68_TILEMAP_COLS", vdp::TILEMAP_COLS as u32),
@@ -225,114 +200,55 @@ fn header_sizes_match_emulator_abi() {
 }
 
 #[test]
-fn tpu_command_encoding_matches_emulator_abi() {
+fn gfx_flag_defines_match_the_renderer() {
     let header = devkit_headers();
-    let tpu_src = repo_file("crates/emu/src/tpu.rs");
+    let on = 0x8000u16;
+    let hi = header_const(&header, "V68_HI") as u16;
+    let hflip = header_const(&header, "V68_HFLIP") as u16;
+    let vflip = header_const(&header, "V68_VFLIP") as u16;
 
-    let pins: Vec<(&str, &str)> = vec![
-        ("V68_TPU_OP_TRI", "OP_TRI"),
-        ("V68_TPU_OP_FILL", "OP_FILL"),
-        ("V68_TPU_TRI_WORDS", "TRI_WORDS"),
-        ("V68_TPU_FILL_WORDS", "FILL_WORDS"),
-        ("V68_TRI_BLEND", "TRI_BLEND"),
-        ("V68_TRI_ZGREATER", "TRI_ZGREATER"),
-        ("V68_TRI_ZTEST_OFF", "TRI_ZTEST_OFF"),
-        ("V68_TRI_ZWRITE_OFF", "TRI_ZWRITE_OFF"),
-        ("V68_FILL_COLOR", "FILL_COLOR"),
-        ("V68_FILL_Z", "FILL_Z"),
-    ];
-
-    for (define, name) in pins {
-        assert_eq!(
-            header_const(&header, define),
-            rust_const(&tpu_src, name),
-            "devkit: {define} disagrees with tpu.rs's {name}"
-        );
-    }
-
-    assert_eq!(
-        header_const(&header, "V68_TPU_BUSY"),
-        bus::TPU_BUSY as u32,
-        "devkit: V68_TPU_BUSY disagrees with bus::TPU_BUSY"
-    );
-}
-
-#[test]
-fn tpu_state_block_offsets_match_emulator_abi() {
-    const COLOR: u32 = 0x1000;
-    const RING: u32 = 0x100;
-    const Z: u32 = 0x2000;
-    const WIDTH: u32 = 16;
-    const HEIGHT: u32 = 8;
-
-    let base = bus::TPU_RAM_BASE as usize;
+    let vram = bus::VRAM_BASE as usize;
     let mut mem = vec![0u8; bus::MEM_END as usize];
 
-    let mut put = |at: u32, bytes: &[u8]| {
-        mem[base + at as usize..][..bytes.len()].copy_from_slice(bytes);
+    mem[bus::PALETTE_BASE as usize + 4..][..4].copy_from_slice(&0x0011_1111u32.to_be_bytes());
+    mem[bus::PALETTE_BASE as usize + 8..][..4].copy_from_slice(&0x0022_2222u32.to_be_bytes());
+
+    mem[vram + 64] = 1;
+    mem[vram + 128..vram + 192].fill(2);
+
+    let mut cell = |col: usize, entry: u16| {
+        mem[vram + 0x4_0000 + col * 2..][..2].copy_from_slice(&entry.to_be_bytes());
     };
+    cell(0, 1 | hflip);
+    cell(1, 1 | vflip);
+    cell(2, 2 | hi);
 
-    put(0, &RING.to_be_bytes());
-    put(4, &8u32.to_be_bytes());
-    put(8, &COLOR.to_be_bytes());
-    put(12, &Z.to_be_bytes());
-    put(16, &(WIDTH as u16).to_be_bytes());
-    put(18, &(HEIGHT as u16).to_be_bytes());
+    let mut sprite = |i: usize, x: i16, ctrl: u16| {
+        let e = vram + 0x6_0000 + i * 8;
+        mem[e..e + 2].copy_from_slice(&x.to_be_bytes());
+        mem[e + 4..e + 6].copy_from_slice(&ctrl.to_be_bytes());
+    };
+    sprite(0, 16, on | 1);
+    sprite(1, 30, 1);
+    sprite(2, 40, on | 1);
 
-    for (i, w) in [0x0200_0003u32, 0x0001_0001, 0x0003_0003, 7, 0xBEEF]
-        .into_iter()
-        .enumerate()
-    {
-        put(RING + i as u32 * 4, &w.to_be_bytes());
-    }
-
-    let mut t = Tpu::new();
-    t.tail = 5;
-    tpu::run(&mut t, &mut mem);
-
-    let at = (WIDTH + 1) as usize;
-
-    assert_eq!(
-        mem[base + COLOR as usize + at],
-        7,
-        "the FILL never reached the colour target the header's offsets describe"
-    );
-    assert_eq!(
-        mem[base + Z as usize + at * 2..][..2],
-        [0xBE, 0xEF],
-        "the FILL never reached the z target the header's offsets describe"
-    );
-}
-
-#[test]
-fn vdp_mode_bits_match_emulator_abi() {
-    let header = devkit_headers();
-    let hires = header_const(&header, "V68_MODE_HIRES") as u16;
-    let fb = header_const(&header, "V68_MODE_FB") as u16;
-    let mut mem = vec![0u8; bus::MEM_END as usize];
-
-    mem[bus::PALETTE_BASE as usize + 4..][..4].copy_from_slice(&0x00AB_CDEFu32.to_be_bytes());
-    mem[bus::TPU_RAM_BASE as usize] = 1;
-
-    mem[bus::VDP_MODE as usize..][..2].copy_from_slice(&hires.to_be_bytes());
-    assert_eq!(
-        vdp::mode(&mem),
-        (vdp::WIDTH * 2, vdp::HEIGHT * 2),
-        "V68_MODE_HIRES is not the bit that doubles the output resolution"
-    );
-
-    mem[bus::VDP_MODE as usize..][..2].copy_from_slice(&fb.to_be_bytes());
     let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
     vdp::render(&mem, 255, &mut out);
 
+    assert_eq!(out[7], 0x0011_1111, "V68_HFLIP is not the cell h-flip bit");
     assert_eq!(
-        vdp::mode(&mem),
-        (vdp::WIDTH, vdp::HEIGHT),
-        "V68_MODE_FB must not change the output resolution"
+        out[7 * vdp::WIDTH + 8],
+        0x0011_1111,
+        "V68_VFLIP is not the cell v-flip bit"
     );
     assert_eq!(
-        out[0], 0x00AB_CDEF,
-        "V68_MODE_FB is not the bit that paints the framebuffer plane"
+        out[16], 0x0022_2222,
+        "a V68_HI cell must cover a low-priority sprite"
+    );
+    assert_eq!(out[30], 0, "a sprite without ctrl bit 15 must not render");
+    assert_eq!(
+        out[40], 0x0011_1111,
+        "ctrl bit 15 is not the sprite enable bit"
     );
 }
 

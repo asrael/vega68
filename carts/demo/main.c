@@ -60,6 +60,10 @@ static const V68Song fanfare = { .sections = fanfare_sections, .section_count = 
 
 static const u8 echo_fir[8] = { 90, 40, 18, 8, 4, 2, 1, 1 };
 
+static V68SpriteDesc box = {
+    .x = HOME_X, .y = HOME_Y, .tile = SPRITE_TILE, .w = 16, .h = 16,
+};
+
 static u32 dim(u32 rgb, u32 b) {
     return ((((rgb >> 16) & 0xFF) * b / 255) << 16) |
            ((((rgb >> 8) & 0xFF) * b / 255) << 8) |
@@ -78,14 +82,14 @@ static void load_box(i32 tile) {
             }
 }
 
-static void load_checker(i32 tile) {
+static void load_solid(i32 tile) {
     for (i32 i = 0; i < 64; i++)
-        V68_TILES[tile].px[i >> 3][i & 7] = (u8)(((i & 7) / 4 + (i >> 3) / 4) & 1);
+        V68_TILES[tile].px[i >> 3][i & 7] = 1;
 }
 
 static void setup(void) {
-    V68_PALETTE[0] = 0x00102040;
-    V68_PALETTE[1] = 0x003A3050;
+    v68_palette(0, 0x00102040);
+    v68_palette(1, 0x00182848);
 
     *V68_AUDIO_EDELAY = 20;
     *V68_AUDIO_EFB = 70;
@@ -94,18 +98,15 @@ static void setup(void) {
     for (u8 i = 0; i < 8; i++)
         V68_AUDIO_EFIR[i] = echo_fir[i];
 
-    load_checker(BG_TILE);
+    load_solid(BG_TILE);
     load_box(SPRITE_TILE);
 
     volatile u16 *map = &V68_TILEMAPS[0].cell[0][0];
 
     for (i32 i = 0; i < V68_TILEMAP_CELLS; i++)
-        map[i] = BG_TILE;
+        map[i] = ((i >> 7) + i) & 1 ? BG_TILE : 0;
 
-    V68_SPRITES[0].x = HOME_X;
-    V68_SPRITES[0].y = HOME_Y;
-    V68_SPRITES[0].ctrl = 0x8000 | SPRITE_TILE;
-    V68_SPRITES[0].attr = (1 << 3) | 1;
+    v68_sprite(0, box);
 }
 
 void main(void) {
@@ -117,18 +118,17 @@ void main(void) {
         v68_puts("demo: song failed\n");
 
     for (u32 b = 0; b < 255; b += FADE_STEP) {
-        V68_PALETTE[2] = dim(SPRITE_BODY, b);
-        V68_PALETTE[3] = dim(SPRITE_EDGE, b);
+        v68_palette(2, dim(SPRITE_BODY, b));
+        v68_palette(3, dim(SPRITE_EDGE, b));
         v68_wait_vblank();
     }
 
-    V68_PALETTE[2] = SPRITE_BODY;
-    V68_PALETTE[3] = SPRITE_EDGE;
+    v68_palette(2, SPRITE_BODY);
+    v68_palette(3, SPRITE_EDGE);
 
     i32 x = HOME_X;
     i32 y = HOME_Y;
     u16 bright = 255;
-    u16 scroll = 0;
 
     while (true) {
         v68_wait_vblank();
@@ -149,12 +149,10 @@ void main(void) {
             y = HOME_Y;
         }
 
-        scroll++;
-
         *V68_BRIGHTNESS = bright;
-        V68_SCROLL->plane[0].h = (u16)(scroll / 2);
-        V68_SCROLL->plane[0].v = (u16)((scroll + 1) / 2);
-        V68_SPRITES[0].x = (i16)x;
-        V68_SPRITES[0].y = (i16)y;
+        v68_scroll(0, (u16)(x / 2), (u16)(y / 2));
+        box.x = (i16)x;
+        box.y = (i16)y;
+        v68_sprite(0, box);
     }
 }
