@@ -1,20 +1,11 @@
 #[test]
 fn burned_rom_matches_the_bios_sources() {
-    if std::process::Command::new("m68k-elf-gcc")
-        .arg("--version")
-        .output()
-        .is_err()
-    {
-        eprintln!("skipping: m68k-elf-gcc not on PATH");
-        return;
-    }
-
-    let built = std::fs::read(xtask::build_bios().unwrap()).unwrap();
-    let rom = xtask::repo_root().unwrap().join("bios/vega68.rom");
-    let burned = std::fs::read(&rom).unwrap_or_else(|e| panic!("{}: {e}", rom.display()));
+    let sum = xtask::repo_root().unwrap().join("bios/vega68.rom.sum");
+    let burned = std::fs::read_to_string(&sum)
+        .unwrap_or_else(|e| panic!("{}: {e}; run `cargo xtask bios`", sum.display()));
 
     assert!(
-        built == burned,
+        xtask::bios_checksum().unwrap() == burned.trim(),
         "bios/vega68.rom is stale; run `cargo xtask bios`"
     );
 }

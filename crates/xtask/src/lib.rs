@@ -10,6 +10,28 @@ pub const HEADER_LEN: usize = 16;
 
 const BIOS_EXPORTS: &[&str] = &["v68_monitor", "v68_reset"];
 
+const FNV_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
+const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
+
+pub fn bios_checksum() -> Result<String, String> {
+    let root = repo_root()?;
+    let mut hash = FNV_OFFSET;
+
+    for path in bios_inputs(&root)? {
+        let rel = path.strip_prefix(&root).unwrap_or(&path).to_path_buf();
+        let name = rel.to_string_lossy().replace('\\', "/");
+        let mut body = std::fs::read(&path).map_err(|e| format!("{}: {e}", path.display()))?;
+
+        body.retain(|&b| b != b'\r'); // CRLF checkouts hash like LF ones
+
+        for part in [name.as_bytes(), &[0], &body, &[0]] {
+            hash = fnv(hash, part);
+        }
+    }
+
+    Ok(format!("{hash:016x}"))
+}
+
 pub fn bios_symbol(name: &str) -> Result<u32, String> {
     let map = repo_root()?.join("target/bios/vega68.map");
     let text = std::fs::read_to_string(&map).map_err(|e| format!("{}: {e}", map.display()))?;
@@ -50,10 +72,7 @@ pub fn build_bios() -> Result<PathBuf, String> {
             .map(|f| s(&bios.join(f))),
     );
 
-    let mut inputs = find_files(&bios, &["c", "h", "ld", "s"])?;
-
-    inputs.extend(find_files(&root.join("devkit"), &["h", "ld"])?);
-
+    let inputs = bios_inputs(&root)?;
     let want = args.join("\n");
 
     args.extend([
@@ -161,10 +180,15 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
 
 pub fn burn_rom() -> Result<PathBuf, String> {
     let bin = build_bios()?;
-    let rom = repo_root()?.join("bios/vega68.rom");
+    let root = repo_root()?;
+    let rom = root.join("bios/vega68.rom");
     let image = std::fs::read(&bin).map_err(|e| format!("{}: {e}", bin.display()))?;
 
     write_atomic(&rom, &image)?;
+    write_atomic(
+        &root.join("bios/vega68.rom.sum"),
+        format!("{}\n", bios_checksum()?).as_bytes(),
+    )?;
 
     Ok(rom)
 }
@@ -209,6 +233,14 @@ pub fn status(verb: &str, msg: &str) {
     } else {
         eprintln!("{verb:>12} {msg}");
     }
+}
+
+fn bios_inputs(root: &Path) -> Result<Vec<PathBuf>, String> {
+    let mut inputs = find_files(&root.join("bios"), &["c", "h", "ld", "s"])?;
+
+    inputs.extend(find_files(&root.join("devkit"), &["h", "ld"])?);
+
+    Ok(inputs)
 }
 
 fn cflags(opt: &str) -> Vec<String> {
@@ -292,6 +324,14 @@ pub fn find_files(dir: &Path, exts: &[&str]) -> Result<Vec<PathBuf>, String> {
     files.sort();
 
     Ok(files)
+}
+
+fn fnv(mut hash: u64, bytes: &[u8]) -> u64 {
+    for &b in bytes {
+        hash = (hash ^ u64::from(b)).wrapping_mul(FNV_PRIME);
+    }
+
+    hash
 }
 
 fn inc(root: &Path, dir: &str) -> String {
