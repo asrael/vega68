@@ -10,55 +10,41 @@
 #define SPRITE_EDGE 0x00FFFFFF
 #define SPRITE_TILE 1
 
-static const char *intro_lead[] = { "c4 e4 g4 c5", "c5" };
-static const char *intro_harp[] = {
-    "~",
-    "[c5 e5 g5 c6] [e5 g5 c6 e6] [g5 c6 e6 g6] [c6 e6 g6 c6]",
-};
-static const V68Track intro_tracks[] = {
-    { .bars = intro_lead, .bar_count = 2, .patch = V68_PATCH_BRASS, .ch = 0 },
-    { .bars = intro_harp, .bar_count = 2, .patch = V68_PATCH_HARP, .ch = 1 },
-};
-static const V68Section intro_section = { .tracks = intro_tracks, .track_count = 2, .bar_frames = 90 };
-
 static const char *body_lead[] = {
-    "c4 e4 g4 c5",
-    "f4 a4 c5 f5",
-    "g4 b4 d5 g5",
-    "e5@2 d5 c5",
+    "g4 c5 ~ c5 e5 c5 ~ g4",
+    "a4 c5 ~ c5 f5 c5 ~ a4",
+    "b4 d5 ~ d5 g5 d5 ~ b4",
+    "e5@2 d5 c5@3 ~ g4",
 };
-static const char *body_harp[] = {
-    "[c3 e3 g3 c4] [c3 e3 g3 c4] [c3 e3 g3 c4] [c3 e3 g3 c4]",
-    "[f3 a3 c4 f4] [f3 a3 c4 f4] [f3 a3 c4 f4] [f3 a3 c4 f4]",
-    "[g3 b3 d4 g4] [g3 b3 d4 g4] [g3 b3 d4 g4] [g3 b3 d4 g4]",
-    "[c4 g3 e3 c3] [c4 g3 e3 c3] [c4 g3 e3 c3] [c4 g3 e3 c3]",
-};
-static const char *body_strings[] = { "c4", "-", "g3", "e4" };
 static const char *body_bass[] = {
-    "c2 g2 c2 g2",
-    "f2 c3 f2 c3",
-    "g2 d3 g2 d3",
-    "c2 g2 c2 g2",
+    "c2 c3 c2 c2 c3 c2 g2 c3",
+    "f2 f3 f2 f2 f3 f2 c3 f3",
+    "g2 g3 g2 g2 g3 g2 d3 g3",
+    "c2 c3 c2 g2 c3 c2 g2 c3",
 };
 static const char *body_perc[] = {
-    "k ~ h ~ k s h ~",
-    "k ~ h s k s h ~",
-    "k ~ h ~ k s h ~",
-    "k ~ h s k h s h",
+    "k h s h k h s h",
+    "k h s h k h s h",
+    "k h s h k h s h",
+    "k h s h k s s s",
 };
-static const V68Track body_tracks[] = {
-    { body_lead, 4, V68_PATCH_BRASS, 0, 0 },
-    { body_harp, 4, V68_PATCH_HARP, 1, 0 },
-    { body_strings, 4, V68_PATCH_STRINGS, 2, 0 },
+static const V68Track groove_tracks[] = {
     { body_bass, 4, V68_PATCH_BASS, 3, 0 },
     { body_perc, 4, V68_PATCH_PERC, 11, 0, 6 },
 };
-static const V68Section body_section = { .tracks = body_tracks, .track_count = 5, .bar_frames = 90 };
+static const V68Track full_tracks[] = {
+    { body_lead, 4, V68_PATCH_BRASS, 0, 0 },
+    { body_bass, 4, V68_PATCH_BASS, 3, 0 },
+    { body_perc, 4, V68_PATCH_PERC, 11, 0, 6 },
+};
 
-static const V68Section fanfare_sections[] = { intro_section, body_section };
-static const V68Song fanfare = { .sections = fanfare_sections, .section_count = 2, .loop_section = 1 };
+static const V68Section sections[] = {
+    { .tracks = groove_tracks, .track_count = 2, .bar_frames = 90 },
+    { .tracks = full_tracks, .track_count = 3, .bar_frames = 90 },
+};
+static const V68Song song = { .sections = sections, .section_count = 2, .loop_section = 1 };
 
-static const u8 echo_fir[8] = { 90, 40, 18, 8, 4, 2, 1, 1 };
+static const u8 echo_fir[8] = { 64, 32, 16, 8, 4, 2, 1, 1 };
 
 static V68SpriteDesc box = {
     .x = HOME_X, .y = HOME_Y, .tile = SPRITE_TILE, .w = 16, .h = 16,
@@ -91,10 +77,10 @@ static void setup(void) {
     v68_palette(0, 0x00102040);
     v68_palette(1, 0x00182848);
 
-    *V68_AUDIO_EDELAY = 20;
-    *V68_AUDIO_EFB = 70;
-    *V68_AUDIO_EVOL_L = 80;
-    *V68_AUDIO_EVOL_R = 80;
+    *V68_AUDIO_EDELAY = 6;
+    *V68_AUDIO_EFB = 60;
+    *V68_AUDIO_EVOL_L = 60;
+    *V68_AUDIO_EVOL_R = 60;
     for (u8 i = 0; i < 8; i++)
         V68_AUDIO_EFIR[i] = echo_fir[i];
 
@@ -114,7 +100,7 @@ void main(void) {
     v68_vblank_enable();
     setup();
 
-    if (v68_song_start(&fanfare) != 0)
+    if (v68_song_start(&song) != 0)
         v68_puts("demo: song failed\n");
 
     for (u32 b = 0; b < 255; b += FADE_STEP) {
