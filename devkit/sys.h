@@ -1,7 +1,7 @@
 #ifndef V68_SYS_H
 #define V68_SYS_H
 
-#include "v68_types.h"
+#include "types.h"
 
 #define V68_VDP_STATUS    ((volatile u16 *)0xFF000000)
 #define V68_IRQ_ENABLE    ((volatile u16 *)0xFF000004)
