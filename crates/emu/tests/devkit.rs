@@ -111,9 +111,11 @@ fn sound_patches_devkit_keys_all_twelve_presets_audible_and_distinct() {
 
 #[test]
 fn canvas_devkit_plots_pixels_through_the_tile_swizzle() {
-    let Some(sys) = assert_cart("canvas", "ok\n") else {
+    let Some(mut sys) = assert_cart("canvas", "ok\n") else {
         return;
     };
+
+    sys.run_frame(); // the beam pass over the finished drawing
 
     let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
     sys.render(&mut out);

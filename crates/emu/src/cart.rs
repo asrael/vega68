@@ -99,10 +99,10 @@ pub(crate) fn test_bios() -> Vec<u8> {
 
     let mut b = Vec::new();
 
-    b.extend_from_slice(&STACK_TOP.to_be_bytes());
-    b.extend_from_slice(&8u32.to_be_bytes());
-    b.extend_from_slice(&[0x23, 0xfc, 0x00, 0x00, 0x00, 0x7f, 0xff, 0x00, 0x00, 0x10]);
-    b.extend_from_slice(&[0x4e, 0xf9]);
+    b.extend_from_slice(&STACK_TOP.to_be_bytes()); // vector 0: initial SP
+    b.extend_from_slice(&8u32.to_be_bytes()); // vector 1: reset PC
+    b.extend_from_slice(&[0x23, 0xfc, 0x00, 0x00, 0x00, 0x7f, 0xff, 0x00, 0x00, 0x10]); // move.l #0x7F, BRIGHTNESS
+    b.extend_from_slice(&[0x4e, 0xf9]); // jmp cart entry
     b.extend_from_slice(&(CART_BASE + HEADER_LEN as u32).to_be_bytes());
 
     b

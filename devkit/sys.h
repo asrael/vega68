@@ -26,6 +26,9 @@
 #define V68_RESET_WARM   1
 #define V68_RESET_RELOAD 2
 
+#define V68_MOUSE_L 0x0001
+#define V68_MOUSE_R 0x0002
+
 #define V68_PAD_UP     0x0001
 #define V68_PAD_DOWN   0x0002
 #define V68_PAD_LEFT   0x0004
@@ -38,9 +41,6 @@
 #define V68_PAD_SELECT 0x0200
 #define V68_PAD_L      0x0400
 #define V68_PAD_R      0x0800
-
-#define V68_MOUSE_L 0x0001
-#define V68_MOUSE_R 0x0002
 
 #ifdef __clang__
 #ifdef V68_LSP

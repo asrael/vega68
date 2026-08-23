@@ -310,8 +310,8 @@ impl Apu {
         }
 
         let op0_before = self.fm[ch].phase[0];
-        for op in 0..4 {
-            self.fm[ch].phase[op] = (self.fm[ch].phase[op] + op_freq[op] / SAMPLE_RATE).fract();
+        for (phase, freq) in self.fm[ch].phase.iter_mut().zip(op_freq) {
+            *phase = (*phase + freq / SAMPLE_RATE).fract();
         }
         self.sync_wrap_next[ch] = self.fm[ch].phase[0] < op0_before;
 
@@ -366,6 +366,7 @@ impl Apu {
             .fold(0.0, f64::max)
     }
 
+    #[allow(clippy::needless_range_loop)]
     pub(super) fn fm_key(&mut self, ch: usize, mask: u8) {
         let base = ch * 0x40;
         let ssg_init: [(bool, bool); 4] = std::array::from_fn(|op| {

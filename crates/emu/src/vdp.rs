@@ -3,11 +3,11 @@ use crate::bus::{PALETTE_BASE, VRAM_BASE};
 pub const WIDTH: usize = 320;
 pub const HEIGHT: usize = 180;
 
+pub const SPRITE_COUNT: usize = 128;
+pub const SPRITE_STRIDE: usize = 8;
 pub const TILEMAP_COLS: usize = 128;
 pub const TILEMAP_ROWS: usize = 128;
 pub const TILEMAP_PLANES: usize = 4;
-pub const SPRITE_COUNT: usize = 128;
-pub const SPRITE_STRIDE: usize = 8;
 pub const TILEMAP_STRIDE: usize = TILEMAP_COLS * TILEMAP_ROWS * 2;
 
 const TILEMAPS: usize = VRAM_BASE as usize + 0x4_0000;
@@ -19,23 +19,31 @@ const SCROLL_COL_V: usize = SCROLL + 0x5B0;
 pub fn render(mem: &[u8], brightness: u8, out: &mut [u32]) {
     assert!(out.len() >= WIDTH * HEIGHT);
 
-    out[..WIDTH * HEIGHT].fill(palette(mem, 0));
+    for y in 0..HEIGHT {
+        render_line(mem, brightness, y, out);
+    }
+}
+
+pub fn render_line(mem: &[u8], brightness: u8, y: usize, out: &mut [u32]) {
+    let row = &mut out[y * WIDTH..][..WIDTH];
+
+    row.fill(palette(mem, 0));
 
     for n in 0..TILEMAP_PLANES {
-        paint_plane(mem, n, false, out);
+        paint_plane_line(mem, n, false, y, row);
     }
 
-    paint_sprites(mem, false, out);
+    paint_sprites_line(mem, false, y, row);
 
     for n in 0..TILEMAP_PLANES - 1 {
-        paint_plane(mem, n, true, out);
+        paint_plane_line(mem, n, true, y, row);
     }
 
-    paint_sprites(mem, true, out);
-    paint_plane(mem, TILEMAP_PLANES - 1, true, out);
+    paint_sprites_line(mem, true, y, row);
+    paint_plane_line(mem, TILEMAP_PLANES - 1, true, y, row);
 
     if brightness != 255 {
-        for px in &mut out[..WIDTH * HEIGHT] {
+        for px in row {
             *px = scale(*px, brightness);
         }
     }
@@ -45,43 +53,40 @@ fn be16(mem: &[u8], a: usize) -> u16 {
     u16::from_be_bytes([mem[a], mem[a + 1]])
 }
 
-fn paint_plane(mem: &[u8], n: usize, hi: bool, out: &mut [u32]) {
+fn paint_plane_line(mem: &[u8], n: usize, hi: bool, y: usize, row: &mut [u32]) {
     let map = TILEMAPS + n * TILEMAP_STRIDE;
     let plane_h = be16(mem, SCROLL + n * 4);
     let plane_v = be16(mem, SCROLL + n * 4 + 2);
+    let h = plane_h.wrapping_add(be16(mem, SCROLL_LINE_H + n * 360 + y * 2)) as usize;
 
-    for y in 0..HEIGHT {
-        let h = plane_h.wrapping_add(be16(mem, SCROLL_LINE_H + n * 360 + y * 2)) as usize;
+    for (x, px) in row.iter_mut().enumerate() {
+        let v = plane_v.wrapping_add(be16(mem, SCROLL_COL_V + n * 80 + (x / 8) * 2)) as usize;
+        let (sx, sy) = ((x + h) & 1023, (y + v) & 1023);
+        let entry = be16(mem, map + ((sy / 8) * TILEMAP_COLS + sx / 8) * 2);
 
-        for x in 0..WIDTH {
-            let v = plane_v.wrapping_add(be16(mem, SCROLL_COL_V + n * 80 + (x / 8) * 2)) as usize;
-            let (sx, sy) = ((x + h) & 1023, (y + v) & 1023);
-            let entry = be16(mem, map + ((sy / 8) * TILEMAP_COLS + sx / 8) * 2);
+        if (entry & 0x4000 != 0) != hi {
+            continue;
+        }
 
-            if (entry & 0x4000 != 0) != hi {
-                continue;
-            }
+        let (mut tx, mut ty) = (sx % 8, sy % 8);
 
-            let (mut tx, mut ty) = (sx % 8, sy % 8);
+        if entry & 0x1000 != 0 {
+            tx = 7 - tx;
+        }
 
-            if entry & 0x1000 != 0 {
-                tx = 7 - tx;
-            }
+        if entry & 0x2000 != 0 {
+            ty = 7 - ty;
+        }
 
-            if entry & 0x2000 != 0 {
-                ty = 7 - ty;
-            }
+        let index = tile_pixel(mem, (entry & 0x0FFF) as usize, tx, ty);
 
-            let index = tile_pixel(mem, (entry & 0x0FFF) as usize, tx, ty);
-
-            if index != 0 {
-                out[y * WIDTH + x] = palette(mem, index);
-            }
+        if index != 0 {
+            *px = palette(mem, index);
         }
     }
 }
 
-fn paint_sprites(mem: &[u8], hi: bool, out: &mut [u32]) {
+fn paint_sprites_line(mem: &[u8], hi: bool, y: usize, row: &mut [u32]) {
     for s in (0..SPRITE_COUNT).rev() {
         let e = SPRITES + s * SPRITE_STRIDE;
         let ctrl = be16(mem, e + 4);
@@ -97,37 +102,29 @@ fn paint_sprites(mem: &[u8], hi: bool, out: &mut [u32]) {
             (((attr & 7) + 1) * 8) as i32,
             ((((attr >> 3) & 7) + 1) * 8) as i32,
         );
+        let sy = y as i32 - y0;
+
+        if !(0..h).contains(&sy) {
+            continue;
+        }
+
         let tile = (ctrl & 0x0FFF) as usize;
         let offset = (attr >> 8) as usize;
 
-        for sy in 0..h {
-            let py = y0 + sy;
+        for sx in 0..w {
+            let px = x0 + sx;
 
-            if !(0..HEIGHT as i32).contains(&py) {
+            if !(0..WIDTH as i32).contains(&px) {
                 continue;
             }
 
-            for sx in 0..w {
-                let px = x0 + sx;
+            let fx = if ctrl & 0x1000 != 0 { w - 1 - sx } else { sx } as usize;
+            let fy = if ctrl & 0x2000 != 0 { h - 1 - sy } else { sy } as usize;
+            let t = tile + (fy / 8) * (w as usize / 8) + fx / 8;
+            let index = tile_pixel(mem, t, fx % 8, fy % 8);
 
-                if !(0..WIDTH as i32).contains(&px) {
-                    continue;
-                }
-
-                let fx = if ctrl & 0x1000 != 0 { w - 1 - sx } else { sx } as usize;
-                let fy = if ctrl & 0x2000 != 0 { h - 1 - sy } else { sy } as usize;
-                let t = tile + (fy / 8) * (w as usize / 8) + fx / 8;
-                let index = tile_pixel(mem, t, fx % 8, fy % 8);
-
-                if index != 0 {
-                    let index = if offset == 0 {
-                        index
-                    } else {
-                        (index + offset) & 0xFF
-                    };
-
-                    out[py as usize * WIDTH + px as usize] = palette(mem, index);
-                }
+            if index != 0 {
+                row[px as usize] = palette(mem, (index + offset) & 0xFF);
             }
         }
     }

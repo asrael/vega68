@@ -163,6 +163,7 @@ impl Apu {
         }
     }
 
+    #[allow(clippy::needless_range_loop)]
     fn mix(&mut self, mem: &[u8]) -> (f64, f64) {
         self.eg_acc += fm::EG_TICK_PER_SAMPLE;
         while self.eg_acc >= 1.0 {

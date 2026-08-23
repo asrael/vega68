@@ -13,6 +13,7 @@ const RESET_RELOAD: u16 = 2;
 pub struct System {
     pub bus: Bus,
     pub cpu: CpuCore,
+    frame: Vec<u32>,
 }
 
 fn line_irq_fires(compare: u16, interval: u16, line: u32) -> bool {
@@ -38,7 +39,11 @@ impl System {
         cpu.set_cpu_type(CpuType::M68040);
         cpu.reset(&mut bus);
 
-        Ok(System { cpu, bus })
+        Ok(System {
+            bus,
+            cpu,
+            frame: vec![0; vdp::WIDTH * vdp::HEIGHT],
+        })
     }
 
     pub fn reload(&mut self, cart: &[u8]) -> Result<(), CartError> {
@@ -60,7 +65,7 @@ impl System {
     }
 
     pub fn render(&self, out: &mut [u32]) {
-        vdp::render(&self.bus.mem, self.bus.brightness, out);
+        out[..vdp::WIDTH * vdp::HEIGHT].copy_from_slice(&self.frame);
     }
 
     pub fn run_frame(&mut self) {
@@ -135,18 +140,30 @@ impl System {
                 instructions += r.instructions + taken;
             }
 
-            let Bus { apu, mem, .. } = &mut self.bus;
-            apu.run_line(mem, line);
+            self.run_line(line);
             lines_run += 1;
         }
 
         lines_run
     }
 
+    fn run_line(&mut self, line: u32) {
+        let Bus { apu, mem, .. } = &mut self.bus;
+        apu.run_line(mem, line);
+
+        if line < VISIBLE_LINES {
+            vdp::render_line(
+                &self.bus.mem,
+                self.bus.brightness,
+                line as usize,
+                &mut self.frame,
+            );
+        }
+    }
+
     fn top_up_frame(&mut self, mut lines_run: u32) {
         while lines_run < LINES_PER_FRAME {
-            let Bus { apu, mem, .. } = &mut self.bus;
-            apu.run_line(mem, lines_run);
+            self.run_line(lines_run);
             lines_run += 1;
         }
 
@@ -174,17 +191,18 @@ mod tests {
         const HANDLER: usize = 0x100;
 
         for (opcode, vector) in [([0x4a, 0xfc], 4usize), ([0x4e, 0x40], 32)] {
+            // illegal -> vector 4, trap #0 -> vector 32
             let entry = CART_BASE + HEADER_LEN as u32;
             let mut bios = vec![0u8; 0x200];
 
             bios[0..4].copy_from_slice(&crate::bus::STACK_TOP.to_be_bytes());
             bios[4..8].copy_from_slice(&8u32.to_be_bytes());
-            bios[8..10].copy_from_slice(&[0x4e, 0xf9]);
+            bios[8..10].copy_from_slice(&[0x4e, 0xf9]); // jmp cart entry
             bios[10..14].copy_from_slice(&entry.to_be_bytes());
             bios[vector * 4..vector * 4 + 4].copy_from_slice(&(HANDLER as u32).to_be_bytes());
-            bios[HANDLER..HANDLER + 4].copy_from_slice(&[0x33, 0xfc, 0x00, 0x21]);
+            bios[HANDLER..HANDLER + 4].copy_from_slice(&[0x33, 0xfc, 0x00, 0x21]); // move.w #'!', DEBUG_PUTC
             bios[HANDLER + 4..HANDLER + 8].copy_from_slice(&crate::bus::DEBUG_PUTC.to_be_bytes());
-            bios[HANDLER + 8..HANDLER + 10].copy_from_slice(&[0x60, 0xfe]);
+            bios[HANDLER + 8..HANDLER + 10].copy_from_slice(&[0x60, 0xfe]); // bra.s .
 
             let cart = test_cart(&[opcode[0], opcode[1], 0x60, 0xfe]);
             let mut m = System::new(&bios, &cart).unwrap();
@@ -334,13 +352,12 @@ mod tests {
 
     #[test]
     fn a_cart_write_to_the_apu_is_heard_the_same_frame() {
-        let base = 0xFF00_0400u32 + 8 * 0x40;
-        let mut code = vec![];
-        code.extend([0x33, 0xFC, 0x00, 0xFE]);
-        code.extend(base.to_be_bytes());
-        code.extend([0x42, 0x39]);
-        code.extend((base + 2).to_be_bytes());
-        code.extend([0x60, 0xFE]);
+        #[rustfmt::skip]
+        let code = [
+            0x33, 0xFC, 0x00, 0xFE, 0xFF, 0x00, 0x06, 0x00, // move.w #0xFE, V68_AUDIO_CH(8)
+            0x42, 0x39, 0xFF, 0x00, 0x06, 0x02,             // clr.b  V68_AUDIO_CH(8)+2
+            0x60, 0xFE,                                     // bra.s  .
+        ];
 
         let mut m = System::new(&test_bios(), &test_cart(&code)).unwrap();
         m.run_frame();
@@ -349,6 +366,35 @@ mod tests {
             m.bus.apu.frame.iter().any(|&s| s != 0),
             "square never reached the mix"
         );
+    }
+
+    #[test]
+    fn a_mid_frame_brightness_write_lands_on_its_own_line() {
+        #[rustfmt::skip]
+        let code = [
+            0x30, 0x39, 0xFF, 0x00, 0x00, 0x00, // loop: move.w VDP_STATUS, d0
+            0x02, 0x40, 0x00, 0xFF,             //       andi.w #LINE_MASK, d0
+            0x33, 0xC0, 0xFF, 0x00, 0x00, 0x10, //       move.w d0, BRIGHTNESS
+            0x60, 0xEE,                         //       bra.s  loop
+        ];
+        let mut m = System::new(&test_bios(), &test_cart(&code)).unwrap();
+        let pal = crate::bus::PALETTE_BASE as usize;
+
+        m.bus.mem[pal..pal + 4].copy_from_slice(&0x00FF_FFFFu32.to_be_bytes());
+
+        m.run_frame();
+        m.run_frame();
+
+        let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
+        m.render(&mut out);
+
+        for (y, want) in [(0usize, 0u32), (100, 0x0064_6464), (179, 0x00B3_B3B3)] {
+            assert_eq!(
+                out[y * vdp::WIDTH],
+                want,
+                "line {y} was not composed with that line's brightness"
+            );
+        }
     }
 
     #[test]

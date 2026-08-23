@@ -129,8 +129,8 @@ void main(void) {
     v68_palette(GOLD, 0x00D8A028);
     v68_canvas(0, BANK_A);
 
-    u16 bank[2] = { BANK_A, BANK_B };
     i32 back = 1;
+    u16 bank[2] = { BANK_A, BANK_B };
     u16 prev_btn = 0;
 
     while (true) {

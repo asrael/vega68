@@ -29,10 +29,31 @@
 #define V68_PATCH_PLUCK   10
 #define V68_PATCH_PERC    11
 
-typedef struct { u8 op[4][7]; u8 fb_alg; u8 echo; } V68Patch;
-typedef struct { const char **bars; u8 bar_count; u8 patch; u8 ch; i8 transpose; u8 level; const V68Patch *patch_ptr; } V68Track;
-typedef struct { const V68Track *tracks; u8 track_count; u16 bar_frames; } V68Section;
-typedef struct { const V68Section *sections; u8 section_count; u8 loop_section; } V68Song;
+typedef struct {
+	u8 op[4][7];
+	u8 fb_alg, echo;
+} V68Patch;
+
+typedef struct {
+	const char **bars;
+	u8 bar_count;
+	u8 patch;
+	u8 ch;
+	i8 transpose;
+	u8 level;
+	const V68Patch *patch_ptr;
+} V68Track;
+
+typedef struct {
+	const V68Track *tracks;
+	u8 track_count;
+	u16 bar_frames;
+} V68Section;
+
+typedef struct {
+	const V68Section *sections;
+	u8 section_count, loop_section;
+} V68Song;
 
 extern const u16 v68_fnum[12];
 extern const u16 v68_psg_period[12];
