@@ -353,5 +353,4 @@ mod tests {
 
         assert_eq!(f[0], 0x0011_1111);
     }
-
 }

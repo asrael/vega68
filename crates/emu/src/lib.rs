@@ -1,9 +1,11 @@
 pub mod apu;
+mod bios;
 pub mod bus;
 pub mod cart;
 pub mod sys;
 pub mod vdp;
 
+pub use bios::BIOS;
 pub use sys::System;
 
 pub fn fnv1a64(bytes: impl IntoIterator<Item = u8>) -> u64 {

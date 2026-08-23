@@ -1,10 +1,11 @@
 use std::ffi::OsStr;
-use std::io::IsTerminal;
+use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Mutex, MutexGuard};
 
+pub const BUNDLE_MAGIC: [u8; 8] = *b"V68BNDL\0";
 pub const CART_MAX: usize = 0x0100_0000;
 pub const HEADER_LEN: usize = 16;
 
@@ -176,6 +177,48 @@ pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
     write_atomic(&stamp, want.as_bytes())?;
 
     Ok(v68)
+}
+
+pub fn bundle(cart_dir: &Path, release: bool) -> Result<PathBuf, String> {
+    let root = repo_root()?;
+    let name = cart_name(cart_dir)?;
+    let v68 = build_cart(cart_dir, &root.join("target/carts"))?;
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let mut args = vec!["build", "-p", "vega68"];
+
+    if release {
+        args.push("--release");
+    }
+
+    run_live(&cargo, &args, &root)?;
+
+    let profile = root.join(if release {
+        "target/release"
+    } else {
+        "target/debug"
+    });
+    let suffix = std::env::consts::EXE_SUFFIX;
+    let emu = profile.join(format!("vega68{suffix}"));
+    let out = profile.join(format!("{name}{suffix}"));
+    let cart = std::fs::read(&v68).map_err(|e| format!("{}: {e}", v68.display()))?;
+    let tmp = tmp_path(&out);
+
+    std::fs::copy(&emu, &tmp).map_err(|e| format!("{}: {e}", emu.display()))?;
+
+    let mut f = std::fs::OpenOptions::new()
+        .append(true)
+        .open(&tmp)
+        .map_err(|e| format!("{}: {e}", tmp.display()))?;
+
+    for part in [&cart[..], &(cart.len() as u64).to_be_bytes(), &BUNDLE_MAGIC] {
+        f.write_all(part)
+            .map_err(|e| format!("{}: {e}", tmp.display()))?;
+    }
+
+    drop(f);
+    publish(&tmp, &out)?;
+
+    Ok(out)
 }
 
 pub fn burn_rom() -> Result<PathBuf, String> {
@@ -388,6 +431,20 @@ fn run<S: AsRef<OsStr>>(name: &str, args: &[S], cwd: Option<&Path>) -> Result<()
             "{name} failed:\n{}",
             String::from_utf8_lossy(&out.stderr)
         ))
+    }
+}
+
+fn run_live<S: AsRef<OsStr>>(name: &str, args: &[S], cwd: &Path) -> Result<(), String> {
+    let status = Command::new(name)
+        .args(args)
+        .current_dir(cwd)
+        .status()
+        .map_err(|e| format!("failed to spawn {name}: {e}"))?;
+
+    if status.success() {
+        Ok(())
+    } else {
+        Err(format!("{name} failed"))
     }
 }
 

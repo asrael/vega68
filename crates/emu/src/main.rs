@@ -1,35 +1,30 @@
-use vega68::System;
-use vega68::apu::out::{AudioOut, QUEUE_TARGET};
+mod watch;
+
+use watch::Watch;
+
+use vega68::apu::out::AudioOut;
 use vega68::bus;
+use vega68::cart;
 use vega68::vdp::{HEIGHT, WIDTH};
+use vega68::{BIOS, System};
 
 use std::num::NonZeroU32;
 use std::rc::Rc;
-use std::time::{Duration, Instant, SystemTime};
+use std::time::{Duration, Instant};
 
 use gilrs::{Axis, Button, EventType, Gilrs};
 use softbuffer::{Context, Surface};
 use winit::application::ApplicationHandler;
 use winit::dpi::{PhysicalPosition, PhysicalSize};
-use winit::event::{DeviceEvent, DeviceId, ElementState, MouseButton, WindowEvent};
+use winit::event::{ElementState, MouseButton, WindowEvent};
 use winit::event_loop::{ActiveEventLoop, ControlFlow, EventLoop};
 use winit::keyboard::{Key, KeyCode, NamedKey, PhysicalKey};
-use winit::window::{CursorGrabMode, Window, WindowId};
+use winit::window::{Window, WindowId};
 
-const BIOS: &[u8] = include_bytes!("../../../bios/vega68.rom");
-const FRAME: Duration = Duration::from_nanos(16_666_667);
-const STICK_LOOK: f64 = 24.0;
-const LOOK_SMOOTH: f64 = 0.5;
-
-const MAX_SCALE: usize = 6;
+const CURSOR_SPEED: f64 = 4.0;
 const FALLBACK_SCALE: usize = 4;
-
-fn centre(origin: (i32, i32), monitor: (u32, u32), window: (u32, u32)) -> (i32, i32) {
-    (
-        origin.0 + (monitor.0 as i32 - window.0 as i32) / 2,
-        origin.1 + (monitor.1 as i32 - window.1 as i32) / 2,
-    )
-}
+const FRAME: Duration = Duration::from_nanos(16_666_667);
+const MAX_SCALE: usize = 6;
 
 fn auto_scale(monitor: Option<(u32, u32)>) -> usize {
     let Some((w, h)) = monitor else {
@@ -41,57 +36,16 @@ fn auto_scale(monitor: Option<(u32, u32)>) -> usize {
         .clamp(1, MAX_SCALE)
 }
 
+fn centre(origin: (i32, i32), monitor: (u32, u32), window: (u32, u32)) -> (i32, i32) {
+    (
+        origin.0 + (monitor.0 as i32 - window.0 as i32) / 2,
+        origin.1 + (monitor.1 as i32 - window.1 as i32) / 2,
+    )
+}
+
 fn die(msg: &str) -> ! {
     eprintln!("{msg}");
     std::process::exit(1);
-}
-
-struct Watch {
-    bytes: Vec<u8>,
-    mtime: Option<SystemTime>,
-    path: String,
-}
-
-impl Watch {
-    fn new(path: String, bytes: Vec<u8>) -> Self {
-        let mtime = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
-
-        Watch { bytes, mtime, path }
-    }
-
-    fn poll(&mut self, sys: &mut System) {
-        let Some(mtime) = std::fs::metadata(&self.path)
-            .and_then(|m| m.modified())
-            .ok()
-        else {
-            return;
-        };
-
-        if Some(mtime) == self.mtime {
-            return;
-        }
-        self.mtime = Some(mtime);
-
-        let bytes = match std::fs::read(&self.path) {
-            Ok(b) => b,
-            Err(e) => {
-                eprintln!("vega68: watch: failed to read {}: {e}", self.path);
-                return;
-            }
-        };
-
-        if bytes == self.bytes {
-            return;
-        }
-
-        match sys.reload(&bytes) {
-            Ok(()) => {
-                eprintln!("vega68: reloaded {}", self.path);
-                self.bytes = bytes;
-            }
-            Err(e) => eprintln!("vega68: watch: {} is not a valid cart: {e}", self.path),
-        }
-    }
 }
 
 fn run_headless(mut sys: System, frames: u64, mut watch: Option<Watch>) {
@@ -146,12 +100,31 @@ fn main() {
         }
     }
 
-    let cart_path = cart_path.unwrap_or_else(|| usage());
-    let file = std::fs::read(&cart_path)
-        .unwrap_or_else(|e| die(&format!("failed to read {cart_path}: {e}")));
-    let sys = System::new(BIOS, &file)
-        .unwrap_or_else(|e| die(&format!("{cart_path} is not a valid cart: {e}")));
-    let watch = watch.then(|| Watch::new(cart_path, file));
+    let exe = std::env::current_exe()
+        .and_then(std::fs::read)
+        .unwrap_or_default();
+    let (sys, watch) = match cart::bundled(&exe).unwrap_or_else(|e| die(&e.to_string())) {
+        Some(bundled) => {
+            if cart_path.is_some() || watch {
+                die("this binary has a bundled cart; only --headless and --scale apply");
+            }
+
+            let sys = System::new(BIOS, bundled)
+                .unwrap_or_else(|e| die(&format!("bundled cart is invalid: {e}")));
+
+            (sys, None)
+        }
+
+        None => {
+            let cart_path = cart_path.unwrap_or_else(|| usage());
+            let file = std::fs::read(&cart_path)
+                .unwrap_or_else(|e| die(&format!("failed to read {cart_path}: {e}")));
+            let sys = System::new(BIOS, &file)
+                .unwrap_or_else(|e| die(&format!("{cart_path} is not a valid cart: {e}")));
+
+            (sys, watch.then(|| Watch::new(cart_path, file)))
+        }
+    };
 
     match headless {
         Some(frames) => run_headless(sys, frames, watch),
@@ -161,12 +134,12 @@ fn main() {
 
 struct Vega68 {
     audio: Option<AudioOut>,
-    captured: bool,
+    buttons: u16,
+    cursor: (f64, f64),
     frame: Vec<u32>,
     gamepad: u16,
     gilrs: Option<Gilrs>,
     initial_scale: Option<usize>,
-    look: (f64, f64),
     next_frame: Instant,
     pad: u16,
     rstick: (f64, f64),
@@ -255,14 +228,14 @@ fn run_windowed(sys: System, scale: Option<usize>, watch: Option<Watch>) {
 
     let mut vega68 = Vega68 {
         audio: AudioOut::new(),
-        captured: false,
+        buttons: 0,
+        cursor: (0.0, 0.0),
         frame: vec![0u32; WIDTH * HEIGHT],
         gamepad: 0,
         gilrs: Gilrs::new()
             .inspect_err(|e| eprintln!("gamepads unavailable: {e}"))
             .ok(),
         initial_scale: scale,
-        look: (0.0, 0.0),
         next_frame: Instant::now(),
         pad: 0,
         rstick: (0.0, 0.0),
@@ -291,32 +264,6 @@ impl Vega68 {
         blit(&self.frame, &mut buffer, w, h);
 
         buffer.present().expect("failed to present frame");
-    }
-
-    fn capture_cursor(&mut self) {
-        let Some(w) = &self.window else { return };
-
-        if self.captured {
-            return;
-        }
-
-        let grabbed = w
-            .set_cursor_grab(CursorGrabMode::Locked)
-            .or_else(|_| w.set_cursor_grab(CursorGrabMode::Confined))
-            .is_ok();
-
-        if grabbed {
-            w.set_cursor_visible(false);
-            self.captured = true;
-        }
-    }
-
-    fn release_cursor(&mut self) {
-        let Some(w) = &self.window else { return };
-
-        let _ = w.set_cursor_grab(CursorGrabMode::None);
-        w.set_cursor_visible(true);
-        self.captured = false;
     }
 
     fn poll_gamepad(&mut self) {
@@ -375,10 +322,8 @@ impl Vega68 {
 impl ApplicationHandler for Vega68 {
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
         let now = Instant::now();
-        // The audio device is the master clock; the wall clock paces only
-        // silent runs, and backstops a stalled stream.
         let due = match &self.audio {
-            Some(a) => a.queued() <= QUEUE_TARGET || now >= self.next_frame + 4 * FRAME,
+            Some(a) => a.queued() <= a.target() || now >= self.next_frame + 4 * FRAME,
             None => now >= self.next_frame,
         };
 
@@ -386,20 +331,33 @@ impl ApplicationHandler for Vega68 {
             if let Some(w) = &mut self.watch {
                 w.poll(&mut self.sys);
             }
+
             self.poll_gamepad();
-            self.sys.bus.pads[0] = self.pad | self.gamepad | self.stick;
-            self.look.0 += self.rstick.0 * STICK_LOOK;
-            self.look.1 += self.rstick.1 * STICK_LOOK;
-            let (dx, dy) = (
-                (self.look.0 * LOOK_SMOOTH) as i16,
-                (self.look.1 * LOOK_SMOOTH) as i16,
-            );
-            self.look = (self.look.0 - dx as f64, self.look.1 - dy as f64);
-            self.sys.bus.mouse = [dx, dy];
+
+            let pads = self.pad | self.gamepad | self.stick;
+            let mut buttons = self.buttons;
+
+            if pads & bus::PAD_A != 0 {
+                buttons |= bus::MOUSE_L;
+            }
+            if pads & bus::PAD_B != 0 {
+                buttons |= bus::MOUSE_R;
+            }
+
+            self.cursor.0 =
+                (self.cursor.0 + self.rstick.0 * CURSOR_SPEED).clamp(0.0, (WIDTH - 1) as f64);
+            self.cursor.1 =
+                (self.cursor.1 + self.rstick.1 * CURSOR_SPEED).clamp(0.0, (HEIGHT - 1) as f64);
+
+            self.sys.bus.pads[0] = pads;
+            self.sys.bus.mouse = [self.cursor.0 as u16, self.cursor.1 as u16];
+            self.sys.bus.mouse_btn = buttons;
             self.sys.run_frame();
+
             if let Some(a) = &self.audio {
                 a.push(&self.sys.bus.apu.frame);
             }
+
             self.next_frame = (self.next_frame + FRAME).max(now - FRAME);
 
             if let Some(w) = &self.window {
@@ -411,6 +369,7 @@ impl ApplicationHandler for Vega68 {
             Some(_) => now + FRAME / 8,
             None => self.next_frame,
         };
+
         event_loop.set_control_flow(ControlFlow::WaitUntil(wake));
     }
 
@@ -438,6 +397,8 @@ impl ApplicationHandler for Vega68 {
                 .create_window(attributes)
                 .expect("failed to create window"),
         );
+
+        window.set_cursor_visible(false);
         let context = Context::new(window.clone()).expect("failed to create softbuffer context");
         let mut surface =
             Surface::new(&context, window.clone()).expect("failed to create softbuffer surface");
@@ -454,26 +415,13 @@ impl ApplicationHandler for Vega68 {
         self.next_frame = Instant::now();
     }
 
-    fn device_event(&mut self, _: &ActiveEventLoop, _: DeviceId, event: DeviceEvent) {
-        if let DeviceEvent::MouseMotion { delta } = event {
-            if self.captured {
-                self.look.0 += delta.0;
-                self.look.1 += delta.1;
-            }
-        }
-    }
-
     fn window_event(&mut self, event_loop: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
         match event {
             WindowEvent::CloseRequested => event_loop.exit(),
 
             WindowEvent::KeyboardInput { event, .. } => {
                 if event.logical_key == Key::Named(NamedKey::Escape) {
-                    if self.captured {
-                        self.release_cursor();
-                    } else {
-                        event_loop.exit();
-                    }
+                    event_loop.exit();
                 } else if let PhysicalKey::Code(code) = event.physical_key {
                     if let Some(bit) = pad_bit(code) {
                         match event.state {
@@ -484,11 +432,30 @@ impl ApplicationHandler for Vega68 {
                 }
             }
 
-            WindowEvent::MouseInput {
-                state: ElementState::Pressed,
-                button: MouseButton::Left,
-                ..
-            } => self.capture_cursor(),
+            WindowEvent::CursorMoved { position, .. } => {
+                if let Some(w) = &self.window {
+                    let size = w.inner_size();
+                    let (scale, ox, oy) = fit(size.width as usize, size.height as usize);
+
+                    self.cursor = (
+                        ((position.x - ox as f64) / scale as f64).clamp(0.0, (WIDTH - 1) as f64),
+                        ((position.y - oy as f64) / scale as f64).clamp(0.0, (HEIGHT - 1) as f64),
+                    );
+                }
+            }
+
+            WindowEvent::MouseInput { state, button, .. } => {
+                let bit = match button {
+                    MouseButton::Left => bus::MOUSE_L,
+                    MouseButton::Right => bus::MOUSE_R,
+                    _ => 0,
+                };
+
+                match state {
+                    ElementState::Pressed => self.buttons |= bit,
+                    ElementState::Released => self.buttons &= !bit,
+                }
+            }
 
             WindowEvent::RedrawRequested => self.draw(),
 

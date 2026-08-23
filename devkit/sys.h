@@ -10,6 +10,7 @@
 #define V68_LINE_INTERVAL ((volatile u16 *)0xFF000014)
 #define V68_MOUSE_X       ((volatile u16 *)0xFF000108)
 #define V68_MOUSE_Y       ((volatile u16 *)0xFF00010C)
+#define V68_MOUSE_BTN     ((volatile u16 *)0xFF000110)
 #define V68_PAD_1         ((volatile u16 *)0xFF000100)
 #define V68_PAD_2         ((volatile u16 *)0xFF000104)
 #define V68_DEBUG_PUTC    ((volatile u16 *)0xFF000200)
@@ -37,6 +38,9 @@
 #define V68_PAD_SELECT 0x0200
 #define V68_PAD_L      0x0400
 #define V68_PAD_R      0x0800
+
+#define V68_MOUSE_L 0x0001
+#define V68_MOUSE_R 0x0002
 
 #ifdef __clang__
 #ifdef V68_LSP

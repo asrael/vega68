@@ -1,2 +1,3 @@
 [alias]
+bundle = "run --quiet -p xtask -- bundle"
 xtask = "run --quiet -p xtask --"

@@ -1,144 +1,192 @@
 #include "v68.h"
 
-#define BG_TILE     5
-#define BRIGHT_STEP 4
-#define FADE_STEP   8
-#define HOME_X      152
-#define HOME_Y      82
-#define MOVE_STEP   2
-#define SPRITE_BODY 0x00FF8000
-#define SPRITE_EDGE 0x00FFFFFF
-#define SPRITE_TILE 1
+#define BANK_A    1
+#define BANK_B    (1 + V68_CANVAS_TILES)
+#define BODY      1
+#define EDGE      2
+#define GOLD      7
+#define HALF      12
+#define MOVE_STEP 2
+#define OUTLINE   4
+#define RADIUS    17
+#define SHADE     6
+#define SPIN_STEP 6
+#define STEEL     5
 
-static const char *body_lead[] = {
-    "g4 c5 ~ c5 e5 c5 ~ g4",
-    "a4 c5 ~ c5 f5 c5 ~ a4",
-    "b4 d5 ~ d5 g5 d5 ~ b4",
-    "e5@2 d5 c5@3 ~ g4",
-};
-static const char *body_bass[] = {
-    "c2 c3 c2 c2 c3 c2 g2 c3",
-    "f2 f3 f2 f2 f3 f2 c3 f3",
-    "g2 g3 g2 g2 g3 g2 d3 g3",
-    "c2 c3 c2 g2 c3 c2 g2 c3",
-};
-static const char *body_perc[] = {
-    "k h s h k h s h",
-    "k h s h k h s h",
-    "k h s h k h s h",
-    "k h s h k s s s",
-};
-static const V68Track groove_tracks[] = {
-    { body_bass, 4, V68_PATCH_BASS, 3, 0 },
-    { body_perc, 4, V68_PATCH_PERC, 11, 0, 6 },
-};
-static const V68Track full_tracks[] = {
-    { body_lead, 4, V68_PATCH_BRASS, 0, 0 },
-    { body_bass, 4, V68_PATCH_BASS, 3, 0 },
-    { body_perc, 4, V68_PATCH_PERC, 11, 0, 6 },
+static const char *hand_point[16] = {
+    "...OO...........",
+    "..OSSO..........",
+    "..OSSO..........",
+    "..OSSO..........",
+    "..OSSO..........",
+    "..OSSOOOOO......",
+    "..OSSOSSSSOOO...",
+    "..OSSOSSSSOSSO..",
+    "OOOSSSSSSSSSSO..",
+    "OSDSSSSSSSSSSO..",
+    "OSDSSSSSSSSSO...",
+    ".OSSSSSSSSSSO...",
+    ".OOOOOOOOOOOO...",
+    "..OGGGGGGGGO....",
+    "..OGGGGGGGGO....",
+    "..OOOOOOOOOO....",
 };
 
-static const V68Section sections[] = {
-    { .tracks = groove_tracks, .track_count = 2, .bar_frames = 90 },
-    { .tracks = full_tracks, .track_count = 3, .bar_frames = 90 },
+static const char *hand_grab[16] = {
+    "................",
+    "................",
+    "..OOOOOOOOOO....",
+    ".OSSOSSOSSOSO...",
+    "OSSSSSSSSSSSSO..",
+    "OSSSSSSSSSSSSO..",
+    "ODSSSSSSSSSSDO..",
+    "ODSSSSSSSSSSDO..",
+    "ODSSSSSSSSSSDO..",
+    ".ODSSSSSSSSDO...",
+    ".OODSSSSSSDOO...",
+    "..OOOOOOOOOO....",
+    "..OGGGGGGGGO....",
+    "..OGGGGGGGGO....",
+    "..OOOOOOOOOO....",
+    "................",
 };
-static const V68Song song = { .sections = sections, .section_count = 2, .loop_section = 1 };
 
-static const u8 echo_fir[8] = { 64, 32, 16, 8, 4, 2, 1, 1 };
+static u32 angle;
+static u32 draw_base;
+static bool held;
+static i32 prev_h[2][2];
+static i32 prev_s[2][2] = { { 160, 90 }, { 160, 90 } };
+static i32 sq_x = 160;
+static i32 sq_y = 90;
 
-static V68SpriteDesc box = {
-    .x = HOME_X, .y = HOME_Y, .tile = SPRITE_TILE, .w = 16, .h = 16,
-};
+static volatile u8 *px(i32 x, i32 y) {
+    u32 cell = (u32)(y >> 3) * V68_CANVAS_COLS + (u32)(x >> 3);
 
-static u32 dim(u32 rgb, u32 b) {
-    return ((((rgb >> 16) & 0xFF) * b / 255) << 16) |
-           ((((rgb >> 8) & 0xFF) * b / 255) << 8) |
-           ((rgb & 0xFF) * b / 255);
+    return V68_VRAM + draw_base + cell * 64 + (u32)(y & 7) * 8 + (u32)(x & 7);
 }
 
-static void load_box(i32 tile) {
-    for (i32 t = 0; t < 4; t++)
-        for (i32 py = 0; py < 8; py++)
-            for (i32 px = 0; px < 8; px++) {
-                i32 gx = (t & 1) * 8 + px;
-                i32 gy = (t >> 1) * 8 + py;
-                bool edge = gx == 0 || gx == 15 || gy == 0 || gy == 15;
+static void fill_clipped(i32 x, i32 y, i32 w, i32 h, u8 color) {
+    i32 x1 = x + w;
+    i32 y1 = y + h;
 
-                V68_TILES[tile + t].px[py][px] = edge ? 3 : 2;
-            }
+    if (x < 0) x = 0;
+    if (y < 0) y = 0;
+    if (x1 > 320) x1 = 320;
+    if (y1 > 180) y1 = 180;
+
+    for (i32 cy = y; cy < y1; cy++)
+        for (i32 cx = x; cx < x1; cx++)
+            *px(cx, cy) = color;
 }
 
-static void load_solid(i32 tile) {
-    for (i32 i = 0; i < 64; i++)
-        V68_TILES[tile].px[i >> 3][i & 7] = 1;
+static void draw_square(void) {
+    i32 c = v68_fcos(angle);
+    i32 s = v68_fsin(angle);
+
+    for (i32 dy = -RADIUS; dy <= RADIUS; dy++)
+        for (i32 dx = -RADIUS; dx <= RADIUS; dx++) {
+            i32 u = (dx * c + dy * s) >> 16;
+            i32 v = (dy * c - dx * s) >> 16;
+
+            if (u < -HALF || u > HALF || v < -HALF || v > HALF)
+                continue;
+
+            bool edge = u < -HALF + 2 || u > HALF - 2 || v < -HALF + 2 || v > HALF - 2;
+
+            *px(sq_x + dx, sq_y + dy) = edge ? EDGE : BODY;
+        }
 }
 
-static void setup(void) {
-    v68_palette(0, 0x00102040);
-    v68_palette(1, 0x00182848);
+static void draw_hand(const char **art, i32 ox, i32 oy) {
+    for (i32 y = 0; y < 16; y++)
+        for (i32 x = 0; x < 16; x++) {
+            char ch = art[y][x];
+            i32 cx = ox + x;
+            i32 cy = oy + y;
 
-    *V68_AUDIO_EDELAY = 6;
-    *V68_AUDIO_EFB = 60;
-    *V68_AUDIO_EVOL_L = 60;
-    *V68_AUDIO_EVOL_R = 60;
-    for (u8 i = 0; i < 8; i++)
-        V68_AUDIO_EFIR[i] = echo_fir[i];
+            if (ch == '.' || cx < 0 || cx > 319 || cy < 0 || cy > 179)
+                continue;
 
-    load_solid(BG_TILE);
-    load_box(SPRITE_TILE);
+            u8 color = ch == 'O' ? OUTLINE
+                     : ch == 'S' ? STEEL
+                     : ch == 'D' ? SHADE
+                                 : GOLD;
 
-    volatile u16 *map = &V68_TILEMAPS[0].cell[0][0];
-
-    for (i32 i = 0; i < V68_TILEMAP_CELLS; i++)
-        map[i] = ((i >> 7) + i) & 1 ? BG_TILE : 0;
-
-    v68_sprite(0, box);
+            *px(cx, cy) = color;
+        }
 }
 
 void main(void) {
     v68_irq_init();
     v68_vblank_enable();
-    setup();
 
-    if (v68_song_start(&song) != 0)
-        v68_puts("demo: song failed\n");
+    v68_palette(0, 0x00102040);
+    v68_palette(BODY, 0x00FF8000);
+    v68_palette(EDGE, 0x00FFC080);
+    v68_palette(OUTLINE, 0x00101018);
+    v68_palette(STEEL, 0x00C8D0E0);
+    v68_palette(SHADE, 0x008890A8);
+    v68_palette(GOLD, 0x00D8A028);
+    v68_canvas(0, BANK_A);
 
-    for (u32 b = 0; b < 255; b += FADE_STEP) {
-        v68_palette(2, dim(SPRITE_BODY, b));
-        v68_palette(3, dim(SPRITE_EDGE, b));
-        v68_wait_vblank();
-    }
-
-    v68_palette(2, SPRITE_BODY);
-    v68_palette(3, SPRITE_EDGE);
-
-    i32 x = HOME_X;
-    i32 y = HOME_Y;
-    u16 bright = 255;
+    u16 bank[2] = { BANK_A, BANK_B };
+    i32 back = 1;
+    u16 prev_btn = 0;
 
     while (true) {
-        v68_wait_vblank();
-
         u16 pad = *V68_PAD_1;
+        u16 btn = *V68_MOUSE_BTN;
+        i32 mx = *V68_MOUSE_X;
+        i32 my = *V68_MOUSE_Y;
 
-        if (pad & V68_PAD_LEFT) x -= MOVE_STEP;
-        if (pad & V68_PAD_RIGHT) x += MOVE_STEP;
-        if (pad & V68_PAD_UP) y -= MOVE_STEP;
-        if (pad & V68_PAD_DOWN) y += MOVE_STEP;
+        if ((btn & V68_MOUSE_L) && !(prev_btn & V68_MOUSE_L) &&
+            mx >= sq_x - RADIUS && mx <= sq_x + RADIUS &&
+            my >= sq_y - RADIUS && my <= sq_y + RADIUS)
+            held = true;
 
-        if ((pad & V68_PAD_A) && bright >= BRIGHT_STEP) bright -= BRIGHT_STEP;
-        if ((pad & V68_PAD_B) && bright <= 255 - BRIGHT_STEP) bright += BRIGHT_STEP;
+        if (held && !(btn & V68_MOUSE_L))
+            held = false;
 
-        if (pad & V68_PAD_START) {
-            bright = 255;
-            x = HOME_X;
-            y = HOME_Y;
+        bool driven = pad & (V68_PAD_LEFT | V68_PAD_RIGHT | V68_PAD_UP | V68_PAD_DOWN);
+
+        if (held) {
+            sq_x = mx;
+            sq_y = my;
+        } else {
+            if (pad & V68_PAD_LEFT) sq_x -= MOVE_STEP;
+            if (pad & V68_PAD_RIGHT) sq_x += MOVE_STEP;
+            if (pad & V68_PAD_UP) sq_y -= MOVE_STEP;
+            if (pad & V68_PAD_DOWN) sq_y += MOVE_STEP;
         }
 
-        *V68_BRIGHTNESS = bright;
-        v68_scroll(0, (u16)(x / 2), (u16)(y / 2));
-        box.x = (i16)x;
-        box.y = (i16)y;
-        v68_sprite(0, box);
+        if (sq_x < RADIUS) sq_x = RADIUS;
+        if (sq_x > 319 - RADIUS) sq_x = 319 - RADIUS;
+        if (sq_y < RADIUS) sq_y = RADIUS;
+        if (sq_y > 179 - RADIUS) sq_y = 179 - RADIUS;
+
+        if (!held && !driven)
+            angle += SPIN_STEP;
+
+        i32 hx = held ? mx - 7 : mx - 3;
+        i32 hy = held ? my - 7 : my;
+
+        draw_base = (u32)bank[back] * 64;
+
+        fill_clipped(prev_s[back][0] - RADIUS, prev_s[back][1] - RADIUS,
+                     2 * RADIUS + 1, 2 * RADIUS + 1, 0);
+        fill_clipped(prev_h[back][0], prev_h[back][1], 16, 16, 0);
+        draw_square();
+        draw_hand(held ? hand_grab : hand_point, hx, hy);
+
+        prev_s[back][0] = sq_x;
+        prev_s[back][1] = sq_y;
+        prev_h[back][0] = hx;
+        prev_h[back][1] = hy;
+        prev_btn = btn;
+
+        v68_wait_vblank();
+        v68_canvas(0, bank[back]);
+
+        back ^= 1;
     }
 }

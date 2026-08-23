@@ -25,6 +25,7 @@ pub const IRQ_ACK: u32 = 0xFF00_0008;
 pub const LINE_COMPARE: u32 = 0xFF00_000C;
 pub const BRIGHTNESS: u32 = 0xFF00_0010;
 pub const LINE_INTERVAL: u32 = 0xFF00_0014;
+pub const MOUSE_BTN: u32 = 0xFF00_0110;
 pub const MOUSE_X: u32 = 0xFF00_0108;
 pub const MOUSE_Y: u32 = 0xFF00_010C;
 pub const PAD_1: u32 = 0xFF00_0100;
@@ -45,6 +46,9 @@ pub const PAD_SELECT: u16 = 0x0200;
 pub const PAD_L: u16 = 0x0400;
 pub const PAD_R: u16 = 0x0800;
 
+pub const MOUSE_L: u16 = 0x0001;
+pub const MOUSE_R: u16 = 0x0002;
+
 pub const VISIBLE_LINES: u32 = 180;
 pub const LINES_PER_FRAME: u32 = 200;
 
@@ -64,7 +68,8 @@ pub struct Bus {
     pub line_compare: u16,
     pub line_interval: u16,
     pub mem: Vec<u8>,
-    pub mouse: [i16; 2],
+    pub mouse: [u16; 2],
+    pub mouse_btn: u16,
     pub pads: [u16; 2],
     pub reset_reason: u16,
 }
@@ -87,6 +92,7 @@ impl Bus {
             line_interval: 0,
             mem,
             mouse: [0; 2],
+            mouse_btn: 0,
             pads: [0; 2],
             reset_reason: 0,
         }
@@ -100,8 +106,9 @@ impl Bus {
             LINE_COMPARE => self.line_compare,
             BRIGHTNESS => self.brightness as u16,
             LINE_INTERVAL => self.line_interval,
-            MOUSE_X => self.mouse[0] as u16,
-            MOUSE_Y => self.mouse[1] as u16,
+            MOUSE_BTN => self.mouse_btn,
+            MOUSE_X => self.mouse[0],
+            MOUSE_Y => self.mouse[1],
             PAD_1 => self.pads[0],
             PAD_2 => self.pads[1],
             RESET_REASON => self.reset_reason,
@@ -314,13 +321,15 @@ mod tests {
     }
 
     #[test]
-    fn mouse_deltas_read_back_signed() {
+    fn pointer_position_and_buttons_read_back() {
         let mut b = bus();
 
-        b.mouse = [-3, 7];
+        b.mouse = [319, 7];
+        b.mouse_btn = MOUSE_L | MOUSE_R;
 
-        assert_eq!(b.read_word(MOUSE_X), 0xFFFD);
+        assert_eq!(b.read_word(MOUSE_X), 319);
         assert_eq!(b.read_word(MOUSE_Y), 7);
+        assert_eq!(b.read_word(MOUSE_BTN), 0b11);
     }
 
     #[test]
@@ -359,5 +368,4 @@ mod tests {
             "the straddled byte never reached the APU"
         );
     }
-
 }

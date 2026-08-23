@@ -531,7 +531,10 @@ mod tests {
         }
 
         let before = a.fm[0].env[0].att;
-        assert!(before < 100, "channel never reached full level: att {before}");
+        assert!(
+            before < 100,
+            "channel never reached full level: att {before}"
+        );
 
         let loud = peak_i(&a.frame);
         a.write(KEYON_ADDR, 0x10);

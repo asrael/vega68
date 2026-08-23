@@ -19,7 +19,9 @@ fn report(verb: &str, path: &Path) {
 }
 
 fn usage() -> ! {
-    eprintln!("usage: cargo xtask <bios | cart <name> [--watch]>");
+    eprintln!(
+        "usage: cargo xtask <bios | bundle <name> [--release] [--run <args>] | cart <name> [--watch]>"
+    );
     std::process::exit(2);
 }
 
@@ -32,6 +34,40 @@ fn main() {
             Ok(rom) => report("Burned", &rom),
             Err(e) => die(e),
         },
+
+        "bundle" => {
+            let name = args.next().unwrap_or_else(|| usage());
+            let root = xtask::repo_root().unwrap_or_else(|e| die(e));
+            let mut release = false;
+            let mut run = false;
+
+            while let Some(arg) = args.next() {
+                match arg.as_str() {
+                    "--release" => release = true,
+                    "--run" => {
+                        run = true;
+                        break;
+                    }
+                    _ => usage(),
+                }
+            }
+
+            let bin = match xtask::bundle(&root.join("carts").join(name), release) {
+                Ok(bin) => bin,
+                Err(e) => die(e),
+            };
+
+            report("Bundled", &bin);
+
+            if run {
+                let status = std::process::Command::new(&bin)
+                    .args(args)
+                    .status()
+                    .unwrap_or_else(|e| die(format!("{}: {e}", bin.display())));
+
+                std::process::exit(status.code().unwrap_or(1));
+            }
+        }
 
         "cart" => {
             let name = args.next().unwrap_or_else(|| usage());

@@ -1,5 +1,6 @@
 use crate::bus::{CART_BASE, CART_SIZE};
 
+pub const BUNDLE_MAGIC: [u8; 8] = *b"V68BNDL\0";
 pub const HEADER_LEN: usize = 16;
 pub const MAGIC: [u8; 4] = *b"V68\0";
 pub const VERSION: u32 = 0;
@@ -7,6 +8,7 @@ pub const VERSION: u32 = 0;
 #[derive(Debug, PartialEq, Eq)]
 pub enum CartError {
     BadEntry(u32),
+    BadFooter,
     BadMagic,
     BadVersion(u32),
     Empty,
@@ -19,6 +21,7 @@ impl std::fmt::Display for CartError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::BadEntry(entry) => write!(f, "entry {entry:#010x} is outside the cart image"),
+            Self::BadFooter => f.write_str("bundled cart length exceeds the executable"),
             Self::BadMagic => f.write_str("not a .v68 cart (bad magic)"),
             Self::BadVersion(version) => write!(f, "cart format version {version} is unsupported"),
             Self::Empty => f.write_str("entry is 0"),
@@ -27,6 +30,26 @@ impl std::fmt::Display for CartError {
             Self::Truncated => f.write_str("truncated"),
         }
     }
+}
+
+pub fn bundled(exe: &[u8]) -> Result<Option<&[u8]>, CartError> {
+    const FOOTER: usize = 8 + BUNDLE_MAGIC.len();
+
+    let Some(foot) = exe.len().checked_sub(FOOTER) else {
+        return Ok(None);
+    };
+
+    if exe[foot + 8..] != BUNDLE_MAGIC {
+        return Ok(None);
+    }
+
+    let len = u64::from_be_bytes(exe[foot..foot + 8].try_into().unwrap());
+    let start = usize::try_from(len)
+        .ok()
+        .and_then(|l| foot.checked_sub(l))
+        .ok_or(CartError::BadFooter)?;
+
+    Ok(Some(&exe[start..foot]))
 }
 
 pub fn parse(file: &[u8]) -> Result<u32, CartError> {
@@ -110,6 +133,16 @@ fn test_header(entry: u32, payload: &[u8]) -> Vec<u8> {
 mod tests {
     use super::*;
 
+    fn bundle(exe: &[u8], cart: &[u8]) -> Vec<u8> {
+        let mut f = exe.to_vec();
+
+        f.extend_from_slice(cart);
+        f.extend_from_slice(&(cart.len() as u64).to_be_bytes());
+        f.extend_from_slice(&BUNDLE_MAGIC);
+
+        f
+    }
+
     fn native_with_entry(entry: u32) -> Vec<u8> {
         let mut f = test_cart(&[0x60, 0xfe]);
 
@@ -124,6 +157,40 @@ mod tests {
             parse(&native_with_entry(CART_BASE + HEADER_LEN as u32)).unwrap(),
             CART_BASE + HEADER_LEN as u32
         );
+    }
+
+    #[test]
+    fn bundle_magic_matches_xtask() {
+        assert_eq!(BUNDLE_MAGIC, xtask::BUNDLE_MAGIC);
+    }
+
+    #[test]
+    fn bundled_ignores_a_plain_binary() {
+        assert_eq!(
+            bundled(b"no footer here, just plain trailing bytes"),
+            Ok(None)
+        );
+        assert_eq!(bundled(b"short"), Ok(None));
+        assert_eq!(bundled(b""), Ok(None));
+    }
+
+    #[test]
+    fn bundled_recovers_the_appended_cart() {
+        assert_eq!(
+            bundled(&bundle(b"an executable image", b"cart bytes")),
+            Ok(Some(&b"cart bytes"[..]))
+        );
+        assert_eq!(bundled(&bundle(b"exe", b"")), Ok(Some(&b""[..])));
+    }
+
+    #[test]
+    fn bundled_rejects_a_length_past_the_file_start() {
+        let mut f = b"tiny".to_vec();
+
+        f.extend_from_slice(&100u64.to_be_bytes());
+        f.extend_from_slice(&BUNDLE_MAGIC);
+
+        assert_eq!(bundled(&f).err(), Some(CartError::BadFooter));
     }
 
     #[test]

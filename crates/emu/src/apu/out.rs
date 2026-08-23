@@ -1,11 +1,13 @@
 use std::collections::VecDeque;
 use std::sync::{Arc, Mutex};
 
+use cpal::FrameCount;
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
-pub const QUEUE_TARGET: usize = 1600;
-
-const CAPACITY: usize = 6400;
+const CAPACITY: usize = 12800;
+const FALLBACK_TARGET: usize = 3200;
+const PERIOD: FrameCount = 800;
+const QUEUE_TARGET: usize = 1600;
 
 fn find_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
     let rate = cpal::SampleRate(48_000);
@@ -27,10 +29,40 @@ fn find_config(device: &cpal::Device) -> Option<cpal::SupportedStreamConfig> {
         .map(|c| c.with_sample_rate(rate))
 }
 
+fn build_stream(
+    device: &cpal::Device,
+    config: &cpal::SupportedStreamConfig,
+    ring: Ring,
+    buffer_size: cpal::BufferSize,
+) -> Result<cpal::Stream, cpal::BuildStreamError> {
+    let mut stream_config: cpal::StreamConfig = config.clone().into();
+    stream_config.buffer_size = buffer_size;
+    let err_fn = |e| eprintln!("audio: stream error: {e}");
+
+    match config.sample_format() {
+        cpal::SampleFormat::I16 => device.build_output_stream(
+            &stream_config,
+            move |data: &mut [i16], _| ring.pop_slice(data),
+            err_fn,
+            None,
+        ),
+
+        cpal::SampleFormat::F32 => device.build_output_stream(
+            &stream_config,
+            move |data: &mut [f32], _| ring.pop_slice_f32(data),
+            err_fn,
+            None,
+        ),
+
+        f => unreachable!("find_config only returns i16 or f32 configs, got {f:?}"),
+    }
+}
+
 pub struct AudioOut {
     ring: Ring,
     #[allow(dead_code)]
     stream: cpal::Stream,
+    target: usize,
 }
 
 impl AudioOut {
@@ -46,33 +78,26 @@ impl AudioOut {
         };
 
         let ring = Ring::new(CAPACITY);
-        let stream_config: cpal::StreamConfig = config.clone().into();
-        let cb_ring = ring.clone();
-        let err_fn = |e| eprintln!("audio: stream error: {e}");
 
-        let stream = match config.sample_format() {
-            cpal::SampleFormat::I16 => device.build_output_stream(
-                &stream_config,
-                move |data: &mut [i16], _| cb_ring.pop_slice(data),
-                err_fn,
-                None,
-            ),
-
-            cpal::SampleFormat::F32 => device.build_output_stream(
-                &stream_config,
-                move |data: &mut [f32], _| cb_ring.pop_slice_f32(data),
-                err_fn,
-                None,
-            ),
-
-            f => unreachable!("find_config only returns i16 or f32 configs, got {f:?}"),
-        };
-
-        let stream = match stream {
-            Ok(s) => s,
+        // One 60 Hz frame per period keeps delivery smooth; a backend that
+        // refuses it gets its default buffering and a deeper queue instead.
+        let (stream, target) = match build_stream(
+            &device,
+            &config,
+            ring.clone(),
+            cpal::BufferSize::Fixed(PERIOD),
+        ) {
+            Ok(s) => (s, QUEUE_TARGET),
             Err(e) => {
-                eprintln!("audio: failed to build output stream: {e}");
-                return None;
+                eprintln!("audio: {PERIOD}-frame periods refused ({e}), buffering deeper");
+
+                match build_stream(&device, &config, ring.clone(), cpal::BufferSize::Default) {
+                    Ok(s) => (s, FALLBACK_TARGET),
+                    Err(e) => {
+                        eprintln!("audio: failed to build output stream: {e}");
+                        return None;
+                    }
+                }
             }
         };
 
@@ -81,7 +106,15 @@ impl AudioOut {
             return None;
         }
 
-        Some(AudioOut { ring, stream })
+        Some(AudioOut {
+            ring,
+            stream,
+            target,
+        })
+    }
+
+    pub fn target(&self) -> usize {
+        self.target
     }
 
     pub fn push(&self, samples: &[i16]) {
