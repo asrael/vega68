@@ -1,7 +1,7 @@
 --target=m68k-none-elf
 -mcpu=68040
--I./devkit
 -I./bios
+-I./devkit
 -DV68_LSP
 -ffreestanding
 -nostdlib

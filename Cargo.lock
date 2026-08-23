@@ -779,9 +779,9 @@ checksum = "0ceec5bc11778974d1bcb055b18002eba7f4b3518b6a0081b3af5f21666da9ad"
 
 [[package]]
 name = "m68k"
-version = "0.8.3"
+version = "0.10.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "89560406f1568dc0dcdb35754a89d6ea38286651925412cde8e0fbba2357b9c7"
+checksum = "6c645c53f1fc33ff9dadbb9e554a1e9b43bc04ea633f8ebf15a167fc604e16f5"
 
 [[package]]
 name = "mach2"

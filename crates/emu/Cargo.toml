@@ -15,7 +15,7 @@ path = "src/main.rs"
 [dependencies]
 cpal = "0.16"
 gilrs = "0.11"
-m68k = "0.8"
+m68k = "0.10"
 softbuffer = "0.4"
 winit = "0.30"
 
