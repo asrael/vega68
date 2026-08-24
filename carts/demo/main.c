@@ -4,14 +4,14 @@
 #define BANK_B    (1 + V68_CANVAS_TILES)
 #define BODY      1
 #define EDGE      2
-#define GOLD      7
+#define OUTLINE   3
+#define STEEL     4
+#define SHADE     5
+#define GOLD      6
 #define HALF      12
 #define MOVE_STEP 2
-#define OUTLINE   4
 #define RADIUS    17
-#define SHADE     6
 #define SPIN_STEP 6
-#define STEEL     5
 
 static const char *hand_point[16] = {
     "...OO...........",
