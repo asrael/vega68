@@ -43,7 +43,7 @@ fn centre(origin: (i32, i32), monitor: (u32, u32), window: (u32, u32)) -> (i32, 
     )
 }
 
-fn die(msg: &str) -> ! {
+fn error(msg: &str) -> ! {
     eprintln!("{msg}");
     std::process::exit(1);
 }
@@ -103,14 +103,14 @@ fn main() {
     let exe = std::env::current_exe()
         .and_then(std::fs::read)
         .unwrap_or_default();
-    let (sys, watch) = match cart::bundled(&exe).unwrap_or_else(|e| die(&e.to_string())) {
+    let (sys, watch) = match cart::bundled(&exe).unwrap_or_else(|e| error(&e.to_string())) {
         Some(bundled) => {
             if cart_path.is_some() || watch {
-                die("this binary has a bundled cart; only --headless and --scale apply");
+                error("this binary has a bundled cart; only --headless and --scale apply");
             }
 
             let sys = System::new(BIOS, bundled)
-                .unwrap_or_else(|e| die(&format!("bundled cart is invalid: {e}")));
+                .unwrap_or_else(|e| error(&format!("bundled cart is invalid: {e}")));
 
             (sys, None)
         }
@@ -118,9 +118,9 @@ fn main() {
         None => {
             let cart_path = cart_path.unwrap_or_else(|| usage());
             let file = std::fs::read(&cart_path)
-                .unwrap_or_else(|e| die(&format!("failed to read {cart_path}: {e}")));
+                .unwrap_or_else(|e| error(&format!("failed to read {cart_path}: {e}")));
             let sys = System::new(BIOS, &file)
-                .unwrap_or_else(|e| die(&format!("{cart_path} is not a valid cart: {e}")));
+                .unwrap_or_else(|e| error(&format!("{cart_path} is not a valid cart: {e}")));
 
             (sys, watch.then(|| Watch::new(cart_path, file)))
         }
