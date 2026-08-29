@@ -27,7 +27,7 @@ pub fn build(fixture: &str) -> Option<(Vec<u8>, Vec<u8>)> {
     let bios = build_bios()?;
     let dir = xtask::repo_root()
         .unwrap()
-        .join(format!("crates/emu/tests/fixtures/{fixture}"));
+        .join(format!("host/emu/tests/fixtures/{fixture}"));
     let v68 = xtask::build_cart(&dir, Path::new(env!("CARGO_TARGET_TMPDIR"))).unwrap();
 
     Some((bios, std::fs::read(&v68).unwrap()))

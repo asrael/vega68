@@ -125,7 +125,7 @@ fn header_mmio_defines(header: &str) -> BTreeMap<String, u32> {
 
 #[test]
 fn mmio_block_is_exhaustive() {
-    let bus_src = repo_file("crates/emu/src/bus.rs");
+    let bus_src = repo_file("host/emu/src/bus.rs");
     let header = devkit_headers();
 
     let rust = bus_mmio_consts(&bus_src);
