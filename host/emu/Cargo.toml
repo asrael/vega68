@@ -14,7 +14,6 @@ path = "src/main.rs"
 
 [dependencies]
 cpal = "0.16"
-gilrs = "0.11"
 m68k = "0.10"
 sdl3-sys = { version = "0.6", features = ["build-from-source-static"] }
 

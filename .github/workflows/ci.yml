@@ -21,7 +21,7 @@ jobs:
         if: runner.os == 'Linux'
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libegl1-mesa-dev libasound2-dev libudev-dev gcc-m68k-linux-gnu binutils-m68k-linux-gnu
+          sudo apt-get install -y cmake xorg-dev libwayland-dev wayland-protocols libxkbcommon-dev libdecor-0-dev libegl1-mesa-dev libasound2-dev gcc-m68k-linux-gnu binutils-m68k-linux-gnu
           sudo ln -s "$(command -v m68k-linux-gnu-gcc)" /usr/local/bin/m68k-elf-gcc
           sudo ln -s "$(command -v m68k-linux-gnu-objcopy)" /usr/local/bin/m68k-elf-objcopy
 

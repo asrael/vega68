@@ -21,7 +21,7 @@ impl Platform {
 
     pub fn new(scale: Option<usize>) -> Platform {
         unsafe {
-            if !SDL_Init(SDL_INIT_VIDEO) {
+            if !SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMEPAD) {
                 Self::fatal("SDL_Init");
             }
 
@@ -96,6 +96,26 @@ impl Platform {
                                 input.keys &= !bit;
                             }
                         }
+                    }
+
+                    SDL_EVENT_GAMEPAD_ADDED => {
+                        SDL_OpenGamepad(ev.gdevice.which);
+                    }
+
+                    SDL_EVENT_GAMEPAD_BUTTON_DOWN | SDL_EVENT_GAMEPAD_BUTTON_UP => {
+                        if let Some(bit) =
+                            Input::gamepad_bit(SDL_GamepadButton(ev.gbutton.button as i32))
+                        {
+                            if ev.gbutton.down {
+                                input.gamepad |= bit;
+                            } else {
+                                input.gamepad &= !bit;
+                            }
+                        }
+                    }
+
+                    SDL_EVENT_GAMEPAD_AXIS_MOTION => {
+                        input.apply_axis(SDL_GamepadAxis(ev.gaxis.axis as i32), ev.gaxis.value);
                     }
 
                     SDL_EVENT_MOUSE_MOTION => {
