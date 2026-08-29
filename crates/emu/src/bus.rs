@@ -33,6 +33,9 @@ pub const PAD_2: u32 = 0xFF00_0104;
 pub const DEBUG_PUTC: u32 = 0xFF00_0200;
 pub const RESET_REASON: u32 = 0xFF00_0300;
 
+pub const MOUSE_L: u16 = 0x0001;
+pub const MOUSE_R: u16 = 0x0002;
+
 pub const PAD_UP: u16 = 0x0001;
 pub const PAD_DOWN: u16 = 0x0002;
 pub const PAD_LEFT: u16 = 0x0004;
@@ -45,9 +48,6 @@ pub const PAD_START: u16 = 0x0100;
 pub const PAD_SELECT: u16 = 0x0200;
 pub const PAD_L: u16 = 0x0400;
 pub const PAD_R: u16 = 0x0800;
-
-pub const MOUSE_L: u16 = 0x0001;
-pub const MOUSE_R: u16 = 0x0002;
 
 pub const VISIBLE_LINES: u32 = 180;
 pub const LINES_PER_FRAME: u32 = 200;
