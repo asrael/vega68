@@ -8,6 +8,7 @@
 #define STEEL     4
 #define SHADE     5
 #define GOLD      6
+#define FX_FRAMES 8
 #define HALF      12
 #define MOVE_STEP 2
 #define RADIUS    17
@@ -51,8 +52,15 @@ static const char *hand_grab[16] = {
     "................",
 };
 
+static const u8 fx_grab[][2] = { { 5, 4 }, { 5, 9 } };
+static const u8 fx_drop[][2] = { { 4, 9 }, { 4, 4 } };
+
 static u32 angle;
 static u32 draw_base;
+static u8 fx_len;
+static const u8 (*fx_seq)[2];
+static u8 fx_step;
+static u8 fx_timer;
 static bool held;
 static i32 prev_h[2][2];
 static i32 prev_s[2][2] = { { 160, 90 }, { 160, 90 } };
@@ -116,6 +124,34 @@ static void draw_hand(const char **art, i32 ox, i32 oy) {
         }
 }
 
+static void note_on(u8 oct, u8 pc) {
+    u16 fnum = v68_fnum[pc];
+
+    V68_AUDIO_CH(0)[0x1C] = (u8)((oct << 3) | (fnum >> 8));
+    V68_AUDIO_CH(0)[0x1D] = (u8)(fnum & 0xFF);
+    *V68_AUDIO_KEYON = 0xF0;
+}
+
+static void fx_play(const u8 (*seq)[2], u8 len) {
+    fx_seq = seq;
+    fx_len = len;
+    fx_step = 0;
+    fx_timer = FX_FRAMES;
+    note_on(seq[0][0], seq[0][1]);
+}
+
+static void fx_tick(void) {
+    if (!fx_timer || --fx_timer)
+        return;
+
+    if (++fx_step < fx_len) {
+        fx_timer = FX_FRAMES;
+        note_on(fx_seq[fx_step][0], fx_seq[fx_step][1]);
+    } else {
+        *V68_AUDIO_KEYON = 0;
+    }
+}
+
 void main(void) {
     v68_irq_init();
     v68_vblank_enable();
@@ -128,6 +164,7 @@ void main(void) {
     v68_palette(SHADE, 0x008890A8);
     v68_palette(GOLD, 0x00D8A028);
     v68_canvas(0, BANK_A);
+    v68_fm_patch(0, &v68_patches[V68_PATCH_HARP]);
 
     i32 back = 1;
     u16 bank[2] = { BANK_A, BANK_B };
@@ -141,11 +178,15 @@ void main(void) {
 
         if ((btn & V68_MOUSE_L) && !(prev_btn & V68_MOUSE_L) &&
             mx >= sq_x - RADIUS && mx <= sq_x + RADIUS &&
-            my >= sq_y - RADIUS && my <= sq_y + RADIUS)
+            my >= sq_y - RADIUS && my <= sq_y + RADIUS) {
             held = true;
+            fx_play(fx_grab, 2);
+        }
 
-        if (held && !(btn & V68_MOUSE_L))
+        if (held && !(btn & V68_MOUSE_L)) {
             held = false;
+            fx_play(fx_drop, 2);
+        }
 
         bool driven = pad & (V68_PAD_LEFT | V68_PAD_RIGHT | V68_PAD_UP | V68_PAD_DOWN);
 
@@ -166,6 +207,8 @@ void main(void) {
 
         if (!held && !driven)
             angle += SPIN_STEP;
+
+        fx_tick();
 
         i32 hx = held ? mx - 7 : mx - 3;
         i32 hy = held ? my - 7 : my;

@@ -32,7 +32,7 @@
 typedef struct {
 	u8 op[4][7];
 	u8 fb_alg, echo;
-} V68Patch;
+} V68_Patch;
 
 typedef struct {
 	const char **bars;
@@ -41,26 +41,26 @@ typedef struct {
 	u8 ch;
 	i8 transpose;
 	u8 level;
-	const V68Patch *patch_ptr;
-} V68Track;
+	const V68_Patch *patch_ptr;
+} V68_Track;
 
 typedef struct {
-	const V68Track *tracks;
+	const V68_Track *tracks;
 	u8 track_count;
 	u16 bar_frames;
-} V68Section;
+} V68_Section;
 
 typedef struct {
-	const V68Section *sections;
+	const V68_Section *sections;
 	u8 section_count, loop_section;
-} V68Song;
+} V68_Song;
 
 extern const u16 v68_fnum[12];
 extern const u16 v68_psg_period[12];
-extern const V68Patch v68_patches[12];
+extern const V68_Patch v68_patches[12];
 
-void v68_fm_patch(u8 ch, const V68Patch *p);
-i32  v68_song_start(const V68Song *song);
+void v68_fm_patch(u8 ch, const V68_Patch *p);
+i32  v68_song_start(const V68_Song *song);
 void v68_song_stop(void);
 
 #endif

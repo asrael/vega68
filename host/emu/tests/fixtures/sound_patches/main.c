@@ -18,7 +18,7 @@ void main(void) {
     v68_vblank_enable();
 
     for (u8 i = 0; i < 12; i++) {
-        const V68Patch *p = &v68_patches[i];
+        const V68_Patch *p = &v68_patches[i];
 
         v68_fm_patch(0, p);
         V68_AUDIO_CH(0)[0x1C] = (4 << 3) | (1083 >> 8);

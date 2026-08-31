@@ -4,9 +4,9 @@
 #define V68_GROUP_MAX         32
 #define V68_SOUND_MAX_ACTIVE   8
 
-typedef struct { u8 note; u16 frames; } V68Ev;
-typedef struct { u16 first; u16 count; } V68TrackLayout;
-typedef struct { u16 next_idx; u16 frames_left; } V68TrackState;
+typedef struct { u8 note; u16 frames; } V68_Ev;
+typedef struct { u16 first; u16 count; } V68_TrackLayout;
+typedef struct { u16 next_idx; u16 frames_left; } V68_TrackState;
 
 typedef struct {
     bool is_bracket;
@@ -33,17 +33,17 @@ static const u8 alg_carriers[8] = { 0x08, 0x08, 0x08, 0x08, 0x0A, 0x0E, 0x0E, 0x
 #define V68_PSG_LEVEL_BASE  6
 #define V68_PERC_LEVEL_BASE 3
 
-static V68Ev pool[V68_SOUND_POOL];
+static V68_Ev pool[V68_SOUND_POOL];
 static u16 pool_used;
-static V68TrackLayout layout[V68_SOUND_MAX_TRACKS];
+static V68_TrackLayout layout[V68_SOUND_MAX_TRACKS];
 static u16 layout_used;
-static const V68Song *playing;
+static const V68_Song *playing;
 
 static u8  section;
 static u16 section_base;
 static u8  section_tracks;
 static u32 section_frames_left;
-static V68TrackState state[V68_SOUND_MAX_ACTIVE];
+static V68_TrackState state[V68_SOUND_MAX_ACTIVE];
 
 const u16 v68_fnum[12] = {
     644, 682, 723, 766, 811, 859, 910, 965, 1022, 1083, 1147, 1215,
@@ -53,7 +53,7 @@ const u16 v68_psg_period[12] = {
     428, 404, 381, 360, 339, 320, 302, 285, 269, 254, 240, 226,
 };
 
-const V68Patch v68_patches[12] = {
+const V68_Patch v68_patches[12] = {
     [V68_PATCH_BRASS] = {
         .op = {
             { 0x52, 0x1E, 0x12, 0x0A, 0x05, 0x36, 0x00 },
@@ -536,7 +536,7 @@ static bool parse_bar(PCtx *ctx, const char *bar, u16 bar_frames) {
     return process_group(ctx, elems, n, bar_frames);
 }
 
-static bool parse_track(u8 sec, u8 trk, const V68Track *t, u16 bar_frames, i32 *first, i32 *count) {
+static bool parse_track(u8 sec, u8 trk, const V68_Track *t, u16 bar_frames, i32 *first, i32 *count) {
     PCtx ctx = {
         .ch = t->ch,
         .transpose = t->transpose,
@@ -566,7 +566,7 @@ static bool parse_track(u8 sec, u8 trk, const V68Track *t, u16 bar_frames, i32 *
     return true;
 }
 
-static bool parse_section(u8 sec, const V68Section *s) {
+static bool parse_section(u8 sec, const V68_Section *s) {
     if (s->track_count > V68_SOUND_MAX_ACTIVE) {
         v68_puts("sound: too many tracks\n");
         return false;
@@ -582,7 +582,7 @@ static bool parse_section(u8 sec, const V68Section *s) {
     }
 
     for (u8 t = 0; t < s->track_count; t++) {
-        const V68Track *trk = &s->tracks[t];
+        const V68_Track *trk = &s->tracks[t];
 
         if (trk->ch > 11) {
             v68_puts("sound: bad channel\n");
@@ -611,7 +611,7 @@ static bool parse_section(u8 sec, const V68Section *s) {
     return true;
 }
 
-void v68_fm_patch(u8 ch, const V68Patch *p) {
+void v68_fm_patch(u8 ch, const V68_Patch *p) {
     volatile u8 *reg = V68_AUDIO_CH(ch);
     const u8    *src = (const u8 *)p->op;
 
@@ -644,11 +644,11 @@ static void ch_silence(u8 ch) {
         V68_AUDIO_CH(ch)[0x02] = 15;
 }
 
-static u8 level_steps(const V68Track *trk) {
+static u8 level_steps(const V68_Track *trk) {
     return trk->level == 0 ? 0 : (trk->level > 15 ? 0 : (u8)(15 - trk->level));
 }
 
-static void dispatch_event(const V68Track *trk, u16 idx) {
+static void dispatch_event(const V68_Track *trk, u16 idx) {
     u8 ch = trk->ch;
     u8 note = pool[idx].note;
 
@@ -698,7 +698,7 @@ static u16 section_layout_base(u8 sec) {
     return base;
 }
 
-static bool section_uses_channel(const V68Section *s, u8 ch) {
+static bool section_uses_channel(const V68_Section *s, u8 ch) {
     for (u8 t = 0; t < s->track_count; t++)
         if (s->tracks[t].ch == ch)
             return true;
@@ -707,12 +707,12 @@ static bool section_uses_channel(const V68Section *s, u8 ch) {
 }
 
 static void section_enter(u8 sec) {
-    const V68Section *s = &playing->sections[sec];
+    const V68_Section *s = &playing->sections[sec];
     u16 base = section_layout_base(sec);
     u16 esend = *V68_AUDIO_ESEND;
 
     if (section_tracks > 0) {
-        const V68Section *prev = &playing->sections[section];
+        const V68_Section *prev = &playing->sections[section];
 
         for (u8 t = 0; t < prev->track_count; t++) {
             u8 ch = prev->tracks[t].ch;
@@ -731,8 +731,8 @@ static void section_enter(u8 sec) {
     section_frames_left = (s->track_count > 0) ? (u32)s->tracks[0].bar_count * s->bar_frames : 0;
 
     for (u8 t = 0; t < s->track_count; t++) {
-        const V68Track *trk = &s->tracks[t];
-        const V68Patch *patch = trk->patch_ptr ? trk->patch_ptr : &v68_patches[trk->patch];
+        const V68_Track *trk = &s->tracks[t];
+        const V68_Patch *patch = trk->patch_ptr ? trk->patch_ptr : &v68_patches[trk->patch];
 
         if (trk->ch < 8) {
             v68_fm_patch(trk->ch, patch);
@@ -767,12 +767,12 @@ void v68_sound_tick(void) {
     if (!playing)
         return;
 
-    const V68Section *s = &playing->sections[section];
+    const V68_Section *s = &playing->sections[section];
 
     for (u8 t = 0; t < section_tracks; t++) {
-        const V68Track *trk = &s->tracks[t];
-        V68TrackState *st = &state[t];
-        const V68TrackLayout *tl = &layout[section_base + t];
+        const V68_Track *trk = &s->tracks[t];
+        V68_TrackState *st = &state[t];
+        const V68_TrackLayout *tl = &layout[section_base + t];
         bool dispatched = false;
 
         while (st->frames_left == 0 && st->next_idx < tl->first + tl->count) {
@@ -806,7 +806,7 @@ void v68_sound_tick(void) {
     }
 }
 
-i32 v68_song_start(const V68Song *song) {
+i32 v68_song_start(const V68_Song *song) {
     v68_song_stop();
 
     if (song->loop_section >= song->section_count) {
@@ -829,7 +829,7 @@ i32 v68_song_start(const V68Song *song) {
 
 void v68_song_stop(void) {
     if (playing && section_tracks > 0) {
-        const V68Section *s = &playing->sections[section];
+        const V68_Section *s = &playing->sections[section];
 
         for (u8 t = 0; t < s->track_count; t++)
             ch_silence(s->tracks[t].ch);

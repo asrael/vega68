@@ -1,3 +1,4 @@
+mod audio;
 mod input;
 
 use std::ffi::CStr;
@@ -9,6 +10,7 @@ use sdl3_sys::everything::*;
 use vega68::bus;
 use vega68::vdp::{HEIGHT, WIDTH};
 
+pub use audio::AudioOut;
 pub use input::Input;
 
 pub struct Platform {

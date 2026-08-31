@@ -57,8 +57,8 @@ void v68_scroll(i32 plane, u16 h, u16 v) {
     V68_SCROLL->plane[plane].v = v;
 }
 
-void v68_sprite(i32 i, V68SpriteDesc desc) {
-    volatile V68Sprite *s = &V68_SPRITES[i];
+void v68_sprite(i32 i, V68_SpriteDesc desc) {
+    volatile V68_Sprite *s = &V68_SPRITES[i];
     i32 w = desc.w ? desc.w : 8;
     i32 h = desc.h ? desc.h : 8;
 

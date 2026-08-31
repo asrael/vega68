@@ -1,5 +1,3 @@
-pub mod out;
-
 mod fm;
 mod pcm;
 mod psg;

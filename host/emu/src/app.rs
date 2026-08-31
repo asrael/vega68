@@ -1,11 +1,10 @@
 use std::time::{Duration, Instant};
 
 use vega68::System;
-use vega68::apu::out::AudioOut;
 use vega68::bus;
 use vega68::vdp::{HEIGHT, WIDTH};
 
-use crate::sdl::{Input, Platform};
+use crate::sdl::{AudioOut, Input, Platform};
 use crate::watch::Watch;
 
 const FRAME: Duration = Duration::from_nanos(16_666_667);
