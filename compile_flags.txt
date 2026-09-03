@@ -1,5 +1,6 @@
 --target=m68k-none-elf
 -mcpu=68040
+-msoft-float
 -I./bios
 -I./devkit
 -DV68_LSP

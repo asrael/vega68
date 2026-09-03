@@ -1,5 +1,3 @@
-use m68k::{AddressBus, FastMem};
-
 use crate::apu::Apu;
 
 pub const BIOS_SIZE: u32 = 0x0010_0000;
@@ -98,6 +96,30 @@ impl Bus {
         }
     }
 
+    pub fn read_u8(&self, a: u32) -> u8 {
+        self.read(a, 1) as u8
+    }
+
+    pub fn read_u16(&self, a: u32) -> u16 {
+        self.read(a, 2) as u16
+    }
+
+    pub fn read_u32(&self, a: u32) -> u32 {
+        self.read(a, 4)
+    }
+
+    pub fn write_u8(&mut self, a: u32, v: u8) {
+        self.write(a, v as u32, 1)
+    }
+
+    pub fn write_u16(&mut self, a: u32, v: u16) {
+        self.write(a, v as u32, 2)
+    }
+
+    pub fn write_u32(&mut self, a: u32, v: u32) {
+        self.write(a, v, 4)
+    }
+
     fn mmio_reg(&self, slot: u32) -> u16 {
         match slot {
             VDP_STATUS => (((self.line >= VISIBLE_LINES) as u16) << 15) | self.line as u16,
@@ -187,40 +209,6 @@ impl Bus {
     }
 }
 
-impl AddressBus for Bus {
-    fn fast_mem(&mut self) -> Option<FastMem> {
-        Some(FastMem {
-            ptr: self.mem.as_mut_ptr(),
-            base: 0,
-            len: MEM_END,
-        })
-    }
-
-    fn read_byte(&mut self, a: u32) -> u8 {
-        self.read(a, 1) as u8
-    }
-
-    fn read_word(&mut self, a: u32) -> u16 {
-        self.read(a, 2) as u16
-    }
-
-    fn read_long(&mut self, a: u32) -> u32 {
-        self.read(a, 4)
-    }
-
-    fn write_byte(&mut self, a: u32, v: u8) {
-        self.write(a, v as u32, 1)
-    }
-
-    fn write_word(&mut self, a: u32, v: u16) {
-        self.write(a, v as u32, 2)
-    }
-
-    fn write_long(&mut self, a: u32, v: u32) {
-        self.write(a, v, 4)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -234,10 +222,10 @@ mod tests {
         let mut b = bus();
 
         b.line = 42;
-        assert_eq!(b.read_word(VDP_STATUS), 42);
+        assert_eq!(b.read_u16(VDP_STATUS), 42);
 
         b.line = 185;
-        assert_eq!(b.read_word(VDP_STATUS), 0x8000 | 185);
+        assert_eq!(b.read_u16(VDP_STATUS), 0x8000 | 185);
     }
 
     #[test]
@@ -246,42 +234,42 @@ mod tests {
 
         b.pads = [0x0123, 0x0800];
 
-        assert_eq!(b.read_word(PAD_1), 0x0123);
-        assert_eq!(b.read_word(PAD_2), 0x0800);
+        assert_eq!(b.read_u16(PAD_1), 0x0123);
+        assert_eq!(b.read_u16(PAD_2), 0x0800);
 
-        b.write_word(BRIGHTNESS, 0x77);
+        b.write_u16(BRIGHTNESS, 0x77);
 
-        assert_eq!(b.read_word(BRIGHTNESS), 0x77);
+        assert_eq!(b.read_u16(BRIGHTNESS), 0x77);
     }
 
     #[test]
     fn irq_enable_and_line_regs_read_back() {
         let mut b = bus();
 
-        b.write_word(IRQ_ENABLE, 0b11);
+        b.write_u16(IRQ_ENABLE, 0b11);
         assert_eq!(
-            b.read_word(IRQ_ENABLE),
+            b.read_u16(IRQ_ENABLE),
             0b11,
             "IRQ_ENABLE did not read back"
         );
 
-        b.write_word(IRQ_ENABLE, 0xFF);
+        b.write_u16(IRQ_ENABLE, 0xFF);
         assert_eq!(
-            b.read_word(IRQ_ENABLE),
+            b.read_u16(IRQ_ENABLE),
             0b11,
             "IRQ_ENABLE did not mask writes to its two live bits"
         );
 
-        b.write_word(LINE_COMPARE, 0x1234);
+        b.write_u16(LINE_COMPARE, 0x1234);
         assert_eq!(
-            b.read_word(LINE_COMPARE),
+            b.read_u16(LINE_COMPARE),
             0x1234,
             "LINE_COMPARE did not read back"
         );
 
-        b.write_word(LINE_INTERVAL, 0x0005);
+        b.write_u16(LINE_INTERVAL, 0x0005);
         assert_eq!(
-            b.read_word(LINE_INTERVAL),
+            b.read_u16(LINE_INTERVAL),
             0x0005,
             "LINE_INTERVAL did not read back"
         );
@@ -303,7 +291,7 @@ mod tests {
         let mut b = bus();
 
         for c in b"hi!" {
-            b.write_word(DEBUG_PUTC, *c as u16);
+            b.write_u16(DEBUG_PUTC, *c as u16);
         }
 
         assert_eq!(b.debug_out, b"hi!");
@@ -314,7 +302,7 @@ mod tests {
         let mut b = bus();
 
         for _ in 0..DEBUG_OUT_CAP + 10 {
-            b.write_word(DEBUG_PUTC, b'x' as u16);
+            b.write_u16(DEBUG_PUTC, b'x' as u16);
         }
 
         assert_eq!(b.debug_out.len(), DEBUG_OUT_CAP);
@@ -327,9 +315,9 @@ mod tests {
         b.mouse = [319, 7];
         b.mouse_btn = MOUSE_L | MOUSE_R;
 
-        assert_eq!(b.read_word(MOUSE_X), 319);
-        assert_eq!(b.read_word(MOUSE_Y), 7);
-        assert_eq!(b.read_word(MOUSE_BTN), 0b11);
+        assert_eq!(b.read_u16(MOUSE_X), 319);
+        assert_eq!(b.read_u16(MOUSE_Y), 7);
+        assert_eq!(b.read_u16(MOUSE_BTN), 0b11);
     }
 
     #[test]
@@ -337,33 +325,33 @@ mod tests {
         let mut b = bus();
 
         b.irq_pending = 0b11;
-        b.write_word(IRQ_ACK, 0b01);
+        b.write_u16(IRQ_ACK, 0b01);
 
         assert_eq!(b.irq_pending, 0b10);
-        assert_eq!(b.read_word(IRQ_ACK), 0b10);
+        assert_eq!(b.read_u16(IRQ_ACK), 0b10);
     }
 
     #[test]
     fn audio_range_is_byte_granular_through_the_bus() {
         let mut b = bus();
 
-        b.write_byte(AUDIO_BASE + 0x1D, 0xAB);
-        b.write_word(AUDIO_BASE, 0x7101);
+        b.write_u8(AUDIO_BASE + 0x1D, 0xAB);
+        b.write_u16(AUDIO_BASE, 0x7101);
 
-        assert_eq!(b.read_byte(AUDIO_BASE + 0x1D), 0xAB);
-        assert_eq!(b.read_byte(AUDIO_BASE), 0x71);
-        assert_eq!(b.read_byte(AUDIO_BASE + 1), 0x01);
-        assert_eq!(b.read_word(AUDIO_BASE), 0x7101);
+        assert_eq!(b.read_u8(AUDIO_BASE + 0x1D), 0xAB);
+        assert_eq!(b.read_u8(AUDIO_BASE), 0x71);
+        assert_eq!(b.read_u8(AUDIO_BASE + 1), 0x01);
+        assert_eq!(b.read_u16(AUDIO_BASE), 0x7101);
     }
 
     #[test]
     fn a_write_straddling_into_the_audio_range_still_reaches_the_apu() {
         let mut b = bus();
 
-        b.write_word(AUDIO_BASE - 1, 0xAB71);
+        b.write_u16(AUDIO_BASE - 1, 0xAB71);
 
         assert_eq!(
-            b.read_byte(AUDIO_BASE),
+            b.read_u8(AUDIO_BASE),
             0x71,
             "the straddled byte never reached the APU"
         );

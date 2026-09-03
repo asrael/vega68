@@ -3,7 +3,7 @@ use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Mutex, OnceLock, PoisonError};
 
 pub const BUNDLE_MAGIC: [u8; 8] = *b"V68BNDL\0";
 pub const CART_MAX: usize = 0x0100_0000;
@@ -44,81 +44,82 @@ pub fn bios_symbol(name: &str) -> Result<u32, String> {
 }
 
 pub fn build_bios() -> Result<PathBuf, String> {
-    static LOCK: Mutex<()> = Mutex::new(());
+    static BIOS: OnceLock<Result<PathBuf, String>> = OnceLock::new();
 
-    let _held = serialize(&LOCK);
+    BIOS.get_or_init(|| {
+        let root = repo_root()?;
+        let bios = root.join("bios");
+        let out_dir = root.join("target/bios");
+        let elf = out_dir.join("vega68.elf");
+        let bin = out_dir.join("vega68.bin");
+        let map = out_dir.join("vega68.map");
+        let sym = out_dir.join("bios.sym");
+        let stamp = out_dir.join("bios.inputs");
+        let elf_tmp = tmp_path(&elf);
+        let bin_tmp = tmp_path(&bin);
+        let map_tmp = tmp_path(&map);
 
-    let root = repo_root()?;
-    let bios = root.join("bios");
-    let out_dir = root.join("target/bios");
-    let elf = out_dir.join("vega68.elf");
-    let bin = out_dir.join("vega68.bin");
-    let map = out_dir.join("vega68.map");
-    let sym = out_dir.join("bios.sym");
-    let stamp = out_dir.join("bios.inputs");
-    let elf_tmp = tmp_path(&elf);
-    let bin_tmp = tmp_path(&bin);
-    let map_tmp = tmp_path(&map);
+        let mut args = cflags("-Os");
 
-    let mut args = cflags("-Os");
+        args.extend(["bios", "devkit"].map(|d| inc(&root, d)));
 
-    args.extend(["bios", "devkit"].map(|d| inc(&root, d)));
+        args.push(format!("-Wl,-L,{}", s(&root.join("devkit"))));
+        args.push(format!("-Wl,-T,{}", s(&bios.join("bios.ld"))));
+        args.push("-Wl,-z,noexecstack".to_owned());
+        args.extend(
+            ["crt0.s", "main.c", "monitor.c"]
+                .iter()
+                .map(|f| s(&bios.join(f))),
+        );
 
-    args.push(format!("-Wl,-L,{}", s(&root.join("devkit"))));
-    args.push(format!("-Wl,-T,{}", s(&bios.join("bios.ld"))));
-    args.push("-Wl,-z,noexecstack".to_owned());
-    args.extend(
-        ["crt0.s", "main.c", "monitor.c"]
-            .iter()
-            .map(|f| s(&bios.join(f))),
-    );
+        let inputs = bios_inputs(&root)?;
+        let want = args.join("\n");
 
-    let inputs = bios_inputs(&root)?;
-    let want = args.join("\n");
+        args.extend([
+            format!("-Wl,-Map={}", s(&map_tmp)),
+            "-o".to_owned(),
+            s(&elf_tmp),
+        ]);
 
-    args.extend([
-        format!("-Wl,-Map={}", s(&map_tmp)),
-        "-o".to_owned(),
-        s(&elf_tmp),
-    ]);
+        if !stale(&bin, &stamp, &want, &inputs) && map.exists() {
+            emit_bios_sym(&map, &sym)?;
 
-    if !stale(&bin, &stamp, &want, &inputs) && map.exists() {
+            return Ok(bin);
+        }
+
+        status("Compiling", "bios");
+        std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
+        run("m68k-elf-gcc", &args, None)?;
+        run(
+            "m68k-elf-objcopy",
+            &["-O", "binary", &s(&elf_tmp), &s(&bin_tmp)],
+            None,
+        )?;
+
+        let image = std::fs::read(&bin_tmp).map_err(|e| e.to_string())?;
+
+        if image
+            .get(0x80..0x400)
+            .is_none_or(|pad| pad.iter().any(|&b| b != 0))
+        {
+            return Err("vega68.bin: code overlaps the vector table pad".into());
+        }
+
+        publish(&elf_tmp, &elf)?;
+        publish(&map_tmp, &map)?;
+        publish(&bin_tmp, &bin)?;
         emit_bios_sym(&map, &sym)?;
+        write_atomic(&stamp, want.as_bytes())?;
 
-        return Ok(bin);
-    }
-
-    status("Compiling", "bios");
-    std::fs::create_dir_all(&out_dir).map_err(|e| e.to_string())?;
-    run("m68k-elf-gcc", &args, None)?;
-    run(
-        "m68k-elf-objcopy",
-        &["-O", "binary", &s(&elf_tmp), &s(&bin_tmp)],
-        None,
-    )?;
-
-    let image = std::fs::read(&bin_tmp).map_err(|e| e.to_string())?;
-
-    if image
-        .get(0x80..0x400)
-        .is_none_or(|pad| pad.iter().any(|&b| b != 0))
-    {
-        return Err("vega68.bin: code overlaps the vector table pad".into());
-    }
-
-    publish(&elf_tmp, &elf)?;
-    publish(&map_tmp, &map)?;
-    publish(&bin_tmp, &bin)?;
-    emit_bios_sym(&map, &sym)?;
-    write_atomic(&stamp, want.as_bytes())?;
-
-    Ok(bin)
+        Ok(bin)
+    })
+    .clone()
 }
 
 pub fn build_cart(cart_dir: &Path, out_dir: &Path) -> Result<PathBuf, String> {
     static LOCK: Mutex<()> = Mutex::new(());
 
-    let _held = serialize(&LOCK);
+    let _held = LOCK.lock().unwrap_or_else(PoisonError::into_inner);
 
     let root = repo_root()?;
     let carts = root.join("carts");
@@ -295,6 +296,7 @@ fn cflags(opt: &str) -> Vec<String> {
         "-std=c99",
         "-Wall",
         "-fno-auto-inc-dec",
+        "-msoft-float",
     ]
     .map(String::from)
     .into()
@@ -450,10 +452,6 @@ fn run_live<S: AsRef<OsStr>>(name: &str, args: &[S], cwd: &Path) -> Result<(), S
 
 fn s(p: &Path) -> String {
     p.to_str().unwrap().to_owned()
-}
-
-fn serialize(lock: &'static Mutex<()>) -> MutexGuard<'static, ()> {
-    lock.lock().unwrap_or_else(|e| e.into_inner())
 }
 
 fn stale(target: &Path, stamp: &Path, want: &str, inputs: &[PathBuf]) -> bool {

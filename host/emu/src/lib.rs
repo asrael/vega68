@@ -2,6 +2,7 @@ pub mod apu;
 mod bios;
 pub mod bus;
 pub mod cart;
+pub mod cpu;
 pub mod system;
 pub mod vdp;
 

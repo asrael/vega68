@@ -19,7 +19,7 @@ pub struct Platform {
 }
 
 impl Platform {
-    const FALLBACK_SCALE: usize = 4;
+    const DEFAULT_SCALE: usize = 6; // 1920x1080
 
     pub fn new(scale: Option<usize>) -> Platform {
         unsafe {
@@ -169,12 +169,12 @@ impl Platform {
 
     fn auto_scale(monitor: Option<(u32, u32)>) -> usize {
         let Some((w, h)) = monitor else {
-            return Self::FALLBACK_SCALE;
+            return Self::DEFAULT_SCALE;
         };
 
         (w as usize / WIDTH)
             .min(h as usize / HEIGHT)
-            .max(1)
+            .clamp(1, Self::DEFAULT_SCALE)
     }
 
     fn fatal(what: &str) -> ! {
@@ -189,13 +189,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn auto_scale_picks_the_largest_integer_fit() {
+    fn auto_scale_picks_the_largest_integer_fit_up_to_1080p() {
         let cases: [(u32, u32, usize); 9] = [
             (1366, 768, 4),
             (1920, 1080, 6),
-            (2560, 1440, 8),
-            (3440, 1440, 8),
-            (3840, 2160, 12),
+            (2560, 1440, 6),
+            (3440, 1440, 6),
+            (3840, 2160, 6),
             (1280, 800, 4),
             (1024, 768, 3),
             (640, 480, 2),
@@ -206,6 +206,6 @@ mod tests {
             assert_eq!(Platform::auto_scale(Some((w, h))), scale, "monitor {w}x{h}");
         }
 
-        assert_eq!(Platform::auto_scale(None), Platform::FALLBACK_SCALE, "no monitor");
+        assert_eq!(Platform::auto_scale(None), Platform::DEFAULT_SCALE, "no monitor");
     }
 }

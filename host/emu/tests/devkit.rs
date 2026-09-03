@@ -18,7 +18,7 @@ fn audio_devkit_keys_a_patch_and_the_mix_matches_the_golden() {
     );
     assert_eq!(
         fnv1a64(&sys.bus.apu.frame),
-        0xb87e_5b5a_725c_2fe5,
+        0x0bee_778e_e388_3045,
         "audio frame drifted from the golden"
     );
 }

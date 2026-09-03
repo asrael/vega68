@@ -1,31 +1,19 @@
-use m68k::{BatchExit, CpuCore, CpuType};
-
 use crate::apu;
 use crate::bus::{Bus, CART_BASE, LINES_PER_FRAME, VISIBLE_LINES};
 use crate::cart::{self, CartError};
+use crate::cpu::Cpu;
 use crate::vdp;
 
-pub const INSTRUCTIONS_PER_LINE: u32 = 1_667;
+pub const LINE_CYCLES: i32 = 9_033;
 
 const FRAME_SAMPLES: usize = LINES_PER_FRAME as usize * apu::SAMPLES_PER_LINE * 2;
 const RESET_RELOAD: u16 = 2;
 
 pub struct System {
     pub bus: Bus,
-    pub cpu: CpuCore,
+    pub cpu: Cpu,
+    cycles: i32,
     frame: Vec<u32>,
-}
-
-fn line_irq_fires(compare: u16, interval: u16, line: u32) -> bool {
-    let compare = compare as u32;
-
-    match interval {
-        0 => line == compare,
-        n => {
-            let n = n as u32;
-            line >= compare && line < VISIBLE_LINES && (line - compare) % n == 0
-        }
-    }
 }
 
 impl System {
@@ -33,15 +21,15 @@ impl System {
         cart::parse(cart)?;
 
         let mut bus = Bus::new(bios.to_vec());
-        let mut cpu = CpuCore::new();
+        let mut cpu = Cpu::new();
 
         bus.mem[CART_BASE as usize..CART_BASE as usize + cart.len()].copy_from_slice(cart);
-        cpu.set_cpu_type(CpuType::M68040);
         cpu.reset(&mut bus);
 
         Ok(System {
             bus,
             cpu,
+            cycles: 0,
             frame: vec![0; vdp::WIDTH * vdp::HEIGHT],
         })
     }
@@ -69,14 +57,7 @@ impl System {
     }
 
     pub fn run_frame(&mut self) {
-        let lines_run = self.run_cpu_lines();
-        self.top_up_frame(lines_run);
-    }
-
-    fn run_cpu_lines(&mut self) -> u32 {
-        let mut lines_run = 0;
-
-        'frame: for line in 0..LINES_PER_FRAME {
+        for line in 0..LINES_PER_FRAME {
             self.bus.line = line;
 
             if line == VISIBLE_LINES && self.bus.irq_enable & 1 != 0 {
@@ -96,55 +77,17 @@ impl System {
             };
             self.cpu.set_irq(level);
 
-            let mut instructions = 0u32;
+            self.cycles += LINE_CYCLES;
 
-            while instructions < INSTRUCTIONS_PER_LINE {
-                let budget = INSTRUCTIONS_PER_LINE - instructions;
-                let r = self.cpu.run_batch(&mut self.bus, budget, &[]);
-
-                let taken = match r.exit {
-                    BatchExit::IllegalInstruction { .. } => {
-                        self.cpu.take_illegal_exception(&mut self.bus);
-                        1
-                    }
-
-                    BatchExit::AlineTrap { .. } => {
-                        self.cpu.take_aline_exception(&mut self.bus);
-                        1
-                    }
-
-                    BatchExit::FlineTrap { .. } => {
-                        self.cpu.take_fline_exception(&mut self.bus);
-                        1
-                    }
-
-                    BatchExit::Breakpoint { .. } => {
-                        self.cpu.take_bkpt_exception(&mut self.bus);
-                        1
-                    }
-
-                    BatchExit::TrapInstruction { trap_num } => {
-                        self.cpu.take_trap_exception(&mut self.bus, trap_num);
-                        1
-                    }
-
-                    BatchExit::BudgetExhausted => 0,
-                    BatchExit::Stopped => break,
-                    BatchExit::WatchedPc { .. } => unreachable!("watch list is empty"),
-                };
-
-                if r.instructions + taken == 0 {
-                    break 'frame;
-                }
-
-                instructions += r.instructions + taken;
+            if self.cycles > 0 {
+                let used = self.cpu.run(&mut self.bus, self.cycles as u32);
+                self.cycles -= used as i32;
             }
 
             self.run_line(line);
-            lines_run += 1;
         }
 
-        lines_run
+        debug_assert_eq!(self.bus.apu.frame.len(), FRAME_SAMPLES);
     }
 
     fn run_line(&mut self, line: u32) {
@@ -160,14 +103,17 @@ impl System {
             );
         }
     }
+}
 
-    fn top_up_frame(&mut self, mut lines_run: u32) {
-        while lines_run < LINES_PER_FRAME {
-            self.run_line(lines_run);
-            lines_run += 1;
+fn line_irq_fires(compare: u16, interval: u16, line: u32) -> bool {
+    let compare = compare as u32;
+
+    match interval {
+        0 => line == compare,
+        n => {
+            let n = n as u32;
+            line >= compare && line < VISIBLE_LINES && (line - compare).is_multiple_of(n)
         }
-
-        debug_assert_eq!(self.bus.apu.frame.len(), FRAME_SAMPLES);
     }
 }
 
@@ -175,7 +121,6 @@ impl System {
 mod tests {
     use super::*;
     use crate::cart::{HEADER_LEN, test_bios, test_cart};
-    use m68k::AddressBus;
 
     #[test]
     fn boots_bios_vectors() {
@@ -190,8 +135,12 @@ mod tests {
     fn surfaced_traps_vector_through_the_table() {
         const HANDLER: usize = 0x100;
 
-        for (opcode, vector) in [([0x4a, 0xfc], 4usize), ([0x4e, 0x40], 32)] {
-            // illegal -> vector 4, trap #0 -> vector 32
+        for (opcode, vector) in [
+            ([0x4a, 0xfc], 4usize), // illegal
+            ([0x4e, 0x40], 32),     // trap #0
+            ([0xa0, 0x00], 10),     // A-line
+            ([0xf2, 0x00], 11),     // F-line: fmove on a core with no FPU
+        ] {
             let entry = CART_BASE + HEADER_LEN as u32;
             let mut bios = vec![0u8; 0x200];
 
@@ -306,7 +255,7 @@ mod tests {
         m.bus.line_compare = 123;
         m.bus.line_interval = 5;
         m.bus.brightness = 10;
-        m.bus.write_byte(crate::bus::AUDIO_BASE, 0xFF);
+        m.bus.write_u8(crate::bus::AUDIO_BASE, 0xFF);
 
         m.reload(&test_cart(&[0x60, 0xfe])).unwrap();
 
@@ -316,7 +265,7 @@ mod tests {
         assert_eq!(m.bus.line_interval, 0, "line_interval not reset");
         assert_eq!(m.bus.brightness, 255, "brightness not reset");
         assert_eq!(
-            m.bus.read_byte(crate::bus::AUDIO_BASE),
+            m.bus.read_u8(crate::bus::AUDIO_BASE),
             0,
             "apu register not reset"
         );
@@ -328,26 +277,6 @@ mod tests {
 
         m.run_frame();
         assert_eq!(m.bus.apu.frame.len(), 1600);
-    }
-
-    #[test]
-    fn top_up_rebuilds_a_stale_frame_when_the_cpu_sticks_before_line_zero() {
-        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
-        m.run_frame();
-        let real = m.bus.apu.frame.clone();
-
-        m.bus.apu.frame = vec![i16::MAX; 1600];
-        m.top_up_frame(0);
-
-        assert_ne!(
-            m.bus.apu.frame,
-            vec![i16::MAX; 1600],
-            "top-up must not no-op just because the stale frame was already full length"
-        );
-        assert_eq!(
-            m.bus.apu.frame, real,
-            "top-up from line 0 must rebuild the same frame a normal run produces"
-        );
     }
 
     #[test]
