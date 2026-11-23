@@ -1,12 +1,10 @@
-use crate::apu;
-use crate::bus::{Bus, CART_BASE, LINES_PER_FRAME, VISIBLE_LINES};
+use crate::bus::{Bus, CART_BASE};
 use crate::cart::{self, CartError};
 use crate::cpu::Cpu;
 use crate::vdp;
 
 pub const LINE_CYCLES: i32 = 9_033;
 
-const FRAME_SAMPLES: usize = LINES_PER_FRAME as usize * apu::SAMPLES_PER_LINE * 2;
 const RESET_RELOAD: u16 = 2;
 
 pub struct System {
@@ -30,8 +28,12 @@ impl System {
             bus,
             cpu,
             cycles: 0,
-            frame: vec![0; vdp::WIDTH * vdp::HEIGHT],
+            frame: vec![0; vdp::HI.w * vdp::HI.h],
         })
+    }
+
+    pub fn mode(&self) -> &'static vdp::Mode {
+        self.bus.mode()
     }
 
     pub fn reload(&mut self, cart: &[u8]) -> Result<(), CartError> {
@@ -45,6 +47,8 @@ impl System {
         self.bus.line_compare = 0;
         self.bus.line_interval = 0;
         self.bus.brightness = 255;
+        self.bus.mode = 0;
+        self.bus.mode_next = 0;
         self.bus.reset_reason = RESET_RELOAD;
 
         self.cpu.reset(&mut self.bus);
@@ -53,18 +57,25 @@ impl System {
     }
 
     pub fn render(&self, out: &mut [u32]) {
-        out[..vdp::WIDTH * vdp::HEIGHT].copy_from_slice(&self.frame);
+        let n = self.mode().w * self.mode().h;
+
+        out[..n].copy_from_slice(&self.frame[..n]);
     }
 
     pub fn run_frame(&mut self) {
-        for line in 0..LINES_PER_FRAME {
+        self.bus.mode = self.bus.mode_next;
+
+        let mode = self.bus.mode();
+        let h = mode.h as u32;
+
+        for line in 0..mode.lines {
             self.bus.line = line;
 
-            if line == VISIBLE_LINES && self.bus.irq_enable & 1 != 0 {
+            if line == h && self.bus.irq_enable & 1 != 0 {
                 self.bus.irq_pending |= 1;
             }
 
-            if line_irq_fires(self.bus.line_compare, self.bus.line_interval, line)
+            if line_irq_fires(self.bus.line_compare, self.bus.line_interval, line, h)
                 && self.bus.irq_enable & 2 != 0
             {
                 self.bus.irq_pending |= 2;
@@ -77,7 +88,7 @@ impl System {
             };
             self.cpu.set_irq(level);
 
-            self.cycles += LINE_CYCLES;
+            self.cycles += line_cycles(self.bus.mode, line);
 
             if self.cycles > 0 {
                 let used = self.cpu.run(&mut self.bus, self.cycles as u32);
@@ -87,16 +98,18 @@ impl System {
             self.run_line(line);
         }
 
-        debug_assert_eq!(self.bus.apu.frame.len(), FRAME_SAMPLES);
+        debug_assert_eq!(self.bus.apu.frame.len(), 1600);
     }
 
     fn run_line(&mut self, line: u32) {
+        let mode = self.bus.mode();
         let Bus { apu, mem, .. } = &mut self.bus;
-        apu.run_line(mem, line);
+        apu.run_line(mem, line, mode.samples);
 
-        if line < VISIBLE_LINES {
+        if line < mode.h as u32 {
             vdp::render_line(
                 &self.bus.mem,
+                mode,
                 self.bus.brightness,
                 line as usize,
                 &mut self.frame,
@@ -105,14 +118,18 @@ impl System {
     }
 }
 
-fn line_irq_fires(compare: u16, interval: u16, line: u32) -> bool {
+pub fn line_cycles(mode: u8, line: u32) -> i32 {
+    (LINE_CYCLES + (mode as u32 & !line & 1) as i32) >> mode
+}
+
+fn line_irq_fires(compare: u16, interval: u16, line: u32, visible: u32) -> bool {
     let compare = compare as u32;
 
     match interval {
         0 => line == compare,
         n => {
             let n = n as u32;
-            line >= compare && line < VISIBLE_LINES && (line - compare).is_multiple_of(n)
+            line >= compare && line < visible && (line - compare).is_multiple_of(n)
         }
     }
 }
@@ -167,22 +184,29 @@ mod tests {
 
     #[test]
     fn line_irq_fires_matches_the_worked_table() {
-        let cases: [(u16, u16, u32); 7] = [
-            (185, 0, 1),
-            (40, 0, 1),
-            (40, 2, 70),
-            (41, 2, 70),
-            (0, 1, 180),
-            (170, 5, 2),
-            (185, 2, 0),
+        let cases: [(u16, u16, u32, u32, u32); 11] = [
+            (185, 0, 1, 180, 200),
+            (40, 0, 1, 180, 200),
+            (40, 2, 70, 180, 200),
+            (41, 2, 70, 180, 200),
+            (0, 1, 180, 180, 200),
+            (170, 5, 2, 180, 200),
+            (185, 2, 0, 180, 200),
+            (370, 0, 1, 360, 400),
+            (0, 1, 360, 360, 400),
+            (350, 5, 2, 360, 400),
+            (358, 1, 2, 360, 400),
         ];
 
-        for (compare, interval, want) in cases {
-            let count = (0..LINES_PER_FRAME)
-                .filter(|&line| line_irq_fires(compare, interval, line))
+        for (compare, interval, want, visible, lines) in cases {
+            let count = (0..lines)
+                .filter(|&line| line_irq_fires(compare, interval, line, visible))
                 .count();
 
-            assert_eq!(count as u32, want, "compare={compare} interval={interval}");
+            assert_eq!(
+                count as u32, want,
+                "compare={compare} interval={interval} visible={visible}"
+            );
         }
     }
 
@@ -255,6 +279,8 @@ mod tests {
         m.bus.line_compare = 123;
         m.bus.line_interval = 5;
         m.bus.brightness = 10;
+        m.bus.mode = 1;
+        m.bus.mode_next = 1;
         m.bus.write_u8(crate::bus::AUDIO_BASE, 0xFF);
 
         m.reload(&test_cart(&[0x60, 0xfe])).unwrap();
@@ -264,6 +290,8 @@ mod tests {
         assert_eq!(m.bus.line_compare, 0, "line_compare not reset");
         assert_eq!(m.bus.line_interval, 0, "line_interval not reset");
         assert_eq!(m.bus.brightness, 255, "brightness not reset");
+        assert_eq!(m.bus.mode, 0, "mode not reset");
+        assert_eq!(m.bus.mode_next, 0, "mode_next not reset");
         assert_eq!(
             m.bus.read_u8(crate::bus::AUDIO_BASE),
             0,
@@ -277,6 +305,125 @@ mod tests {
 
         m.run_frame();
         assert_eq!(m.bus.apu.frame.len(), 1600);
+    }
+
+    #[test]
+    fn hi_res_frames_run_400_lines_with_vblank_at_line_360() {
+        #[rustfmt::skip]
+        let code = [
+            0x30, 0x39, 0xFF, 0x00, 0x00, 0x00, // loop: move.w VDP_STATUS, d0
+            0x6A, 0xF8,                         //       bpl.s  loop
+            0x33, 0xC0, 0x02, 0x02, 0x00, 0x00, //       move.w d0, CART_RAM
+            0x60, 0xFE,                         //       bra.s  .
+        ];
+        let mut m = System::new(&test_bios(), &test_cart(&code)).unwrap();
+        m.bus.write_u16(crate::bus::SCREEN_MODE, 1);
+
+        m.run_frame();
+
+        let ram = crate::bus::RAM_BASE as usize + crate::bus::BIOS_PARTITION as usize;
+        assert_eq!(
+            &m.bus.mem[ram..ram + 2],
+            &(0x8000u16 | 360).to_be_bytes(),
+            "first vblank status was not line 360"
+        );
+        assert_eq!(m.bus.line, 399);
+        assert_eq!(m.bus.apu.frame.len(), 1600);
+        assert_eq!(m.bus.read_u16(crate::bus::SCREEN_MODE), 1);
+    }
+
+    #[test]
+    fn hi_res_raises_the_vblank_irq_at_line_360() {
+        #[rustfmt::skip]
+        let code = [
+            0x30, 0x39, 0xFF, 0x00, 0x00, 0x08, // loop: move.w IRQ_ACK, d0
+            0x02, 0x40, 0x00, 0x01,             //       andi.w #1, d0
+            0x67, 0xF4,                         //       beq.s  loop
+            0x30, 0x39, 0xFF, 0x00, 0x00, 0x00, //       move.w VDP_STATUS, d0
+            0x33, 0xC0, 0x02, 0x02, 0x00, 0x00, //       move.w d0, CART_RAM
+            0x60, 0xFE,                         //       bra.s  .
+        ];
+        let mut m = System::new(&test_bios(), &test_cart(&code)).unwrap();
+        m.bus.write_u16(crate::bus::SCREEN_MODE, 1);
+        m.bus.write_u16(crate::bus::IRQ_ENABLE, 1);
+
+        m.run_frame();
+
+        let ram = crate::bus::RAM_BASE as usize + crate::bus::BIOS_PARTITION as usize;
+        assert_eq!(
+            &m.bus.mem[ram..ram + 2],
+            &(0x8000u16 | 360).to_be_bytes(),
+            "vblank irq was not pending from line 360"
+        );
+    }
+
+    #[test]
+    fn a_mode_switch_lands_whole_frames_in_each_mode() {
+        let mut m = System::new(&test_bios(), &test_cart(&[0x60, 0xfe])).unwrap();
+
+        m.bus.write_u16(crate::bus::SCREEN_MODE, 1);
+        m.run_frame();
+        assert_eq!(m.mode().w, 640, "the frame after the write was not hi-res");
+        assert_eq!(m.bus.line, 399);
+
+        m.bus.write_u16(crate::bus::SCREEN_MODE, 0);
+        assert_eq!(
+            m.bus.read_u16(crate::bus::SCREEN_MODE),
+            1,
+            "write showed mid-frame"
+        );
+        m.run_frame();
+        assert_eq!(m.mode().w, 320, "the frame after the write was not lo-res");
+        assert_eq!(m.bus.line, 199);
+    }
+
+    #[test]
+    fn a_mid_frame_mode_write_waits_for_the_next_frame() {
+        #[rustfmt::skip]
+        let code = [
+            0x30, 0x39, 0xFF, 0x00, 0x00, 0x00, // wait: move.w VDP_STATUS, d0
+            0x0C, 0x40, 0x00, 0x5A,             //       cmpi.w #90, d0
+            0x65, 0xF4,                         //       bcs.s  wait
+            0x33, 0xFC, 0x00, 0x01,             //       move.w #1, SCREEN_MODE
+            0xFF, 0x00, 0x00, 0x18,
+            0x30, 0x39, 0xFF, 0x00, 0x00, 0x00, // loop: move.w VDP_STATUS, d0
+            0x6A, 0xF8,                         //       bpl.s  loop
+            0x33, 0xC0, 0x02, 0x02, 0x00, 0x00, //       move.w d0, CART_RAM
+            0x60, 0xFE,                         //       bra.s  .
+        ];
+        let mut m = System::new(&test_bios(), &test_cart(&code)).unwrap();
+
+        m.run_frame();
+
+        let ram = crate::bus::RAM_BASE as usize + crate::bus::BIOS_PARTITION as usize;
+        assert_eq!(
+            &m.bus.mem[ram..ram + 2],
+            &(0x8000u16 | 180).to_be_bytes(),
+            "the write moved this frame's vblank"
+        );
+        assert_eq!(m.bus.line, 199);
+        assert_eq!(m.bus.apu.frame.len(), 1600);
+        assert_eq!(m.mode().w, 320, "the write switched the frame in progress");
+
+        m.run_frame();
+        assert_eq!(m.mode().w, 640, "the frame after the write was not hi-res");
+        assert_eq!(m.bus.line, 399);
+    }
+
+    #[test]
+    fn line_cycles_give_both_modes_the_same_frame_budget() {
+        for mode in [0u8, 1] {
+            let lines = vdp::MODES[mode as usize].lines;
+            assert_eq!(
+                (0..lines).map(|l| line_cycles(mode, l)).sum::<i32>(),
+                1_806_600,
+                "mode {mode}"
+            );
+        }
+        assert_eq!(
+            (line_cycles(0, 7), line_cycles(1, 0), line_cycles(1, 1)),
+            (9_033, 4_517, 4_516)
+        );
     }
 
     #[test]
@@ -314,12 +461,12 @@ mod tests {
         m.run_frame();
         m.run_frame();
 
-        let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
+        let mut out = vec![0u32; vdp::LO.w * vdp::LO.h];
         m.render(&mut out);
 
         for (y, want) in [(0usize, 0u32), (100, 0x0064_6464), (179, 0x00B3_B3B3)] {
             assert_eq!(
-                out[y * vdp::WIDTH],
+                out[y * vdp::LO.w],
                 want,
                 "line {y} was not composed with that line's brightness"
             );

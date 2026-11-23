@@ -11,7 +11,7 @@ pub(super) fn status(a: &Apu) -> u16 {
 
 pub(super) fn run_frame(a: &mut Apu, mem: &[u8]) {
     for line in 0..200 {
-        a.run_line(mem, line);
+        a.run_line(mem, line, 4);
     }
 }
 

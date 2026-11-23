@@ -3,8 +3,8 @@ mod common;
 use std::path::Path;
 
 use vega68::System;
-use vega68::bus::LINES_PER_FRAME;
 use vega68::system::LINE_CYCLES;
+use vega68::vdp;
 
 #[test]
 #[ignore = "measurement, not a check: cargo test -p vega68 --test calibrate -- --ignored --nocapture"]
@@ -24,7 +24,7 @@ fn instructions_per_line_on_the_demo_and_sound_carts() {
             sys.run_frame();
         }
 
-        let lines = (frames * LINES_PER_FRAME) as f64;
+        let lines = (frames * vdp::LO.lines) as f64;
         let per_line = sys.cpu.retired as f64 / lines;
         let cpi = LINE_CYCLES as f64 / per_line;
 

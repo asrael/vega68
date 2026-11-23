@@ -14,6 +14,7 @@ void main(void) {
         v68_irq_init();
         v68_vblank_enable();
         V68_VEC_LINE = (u32)on_line;
+        v68_mode(V68_MODE_HI);
 
         v68_reset();
     }

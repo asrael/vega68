@@ -17,7 +17,7 @@
 #define V68_RESET_REASON  ((volatile u16 *)0xFF000300)
 
 #define V68_VBLANK    0x8000
-#define V68_LINE_MASK 0x00FF
+#define V68_LINE_MASK 0x01FF
 
 #define V68_IRQ_VBLANK 0x0001
 #define V68_IRQ_LINE   0x0002

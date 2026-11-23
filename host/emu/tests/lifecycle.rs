@@ -32,6 +32,7 @@ fn reset_restarts_the_cart_window_and_restores_the_machine() {
         sys.bus.irq_enable, 0,
         "reset left an interrupt source enabled"
     );
+    assert_eq!(sys.bus.mode_next, 0, "reset left the screen in hi-res");
 }
 
 #[test]

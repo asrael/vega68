@@ -16,13 +16,19 @@
 #define V68_CANVAS_ROWS       23
 #define V68_CANVAS_TILES      (V68_CANVAS_COLS * V68_CANVAS_ROWS)
 
-#define V68_VRAM      	((volatile u8 *)0x03000000)
-#define V68_TILES     	((volatile V68_Tile *)0x03000000)
-#define V68_TILEMAPS  	((volatile V68_Tilemap *)0x03040000)
-#define V68_SPRITES   	((volatile V68_Sprite *)0x03060000)
-#define V68_SCROLL    	((volatile V68_Scroll *)0x03061000)
-#define V68_PALETTE   	((volatile u32 *)0x03080000)
-#define V68_BRIGHTNESS 	((volatile u16 *)0xFF000010)
+#define V68_VRAM            ((volatile u8 *)0x03000000)
+#define V68_TILES           ((volatile V68_Tile *)0x03000000)
+#define V68_TILEMAPS        ((volatile V68_Tilemap *)0x03040000)
+#define V68_SPRITES         ((volatile V68_Sprite *)0x03060000)
+#define V68_SCROLL          ((volatile V68_Scroll *)0x03061000)
+#define V68_SCROLL_HI_LINES ((volatile u16 (*)[360])0x03062000)
+#define V68_PALETTE         ((volatile u32 *)0x03080000)
+#define V68_TILES_HI        ((volatile V68_TileHi *)0x03100000)
+#define V68_BRIGHTNESS      ((volatile u16 *)0xFF000010)
+#define V68_SCREEN_MODE     ((volatile u16 *)0xFF000018)
+
+#define V68_MODE_LO 0
+#define V68_MODE_HI 1
 
 #define V68_HFLIP 0x1000
 #define V68_VFLIP 0x2000
@@ -53,14 +59,22 @@ typedef struct {
 } V68_Tile;
 
 typedef struct {
+	u8 px[16][16];
+} V68_TileHi;
+
+typedef struct {
 	u16 cell[V68_TILEMAP_ROWS][V68_TILEMAP_COLS];
 } V68_Tilemap;
 
 void v68_canvas(i32 plane, i32 tile_base);
 void v68_fill(i32 x, i32 y, i32 w, i32 h, u8 color);
+void v68_mode(u8 mode);
 void v68_palette(i32 i, u32 rgb);
 volatile u8 *v68_pixel(i32 x, i32 y);
+i32 v68_screen_h(void);
+i32 v68_screen_w(void);
 void v68_scroll(i32 plane, u16 h, u16 v);
 void v68_sprite(i32 i, V68_SpriteDesc desc);
+i32 v68_tile_px(void);
 
 #endif

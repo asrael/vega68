@@ -8,13 +8,14 @@ use std::ptr;
 use sdl3_sys::everything::*;
 
 use vega68::bus;
-use vega68::vdp::{HEIGHT, WIDTH};
+use vega68::vdp::{HI, LO};
 
 pub use audio::AudioOut;
 pub use input::Input;
 
 pub struct Platform {
     renderer: *mut SDL_Renderer,
+    size: (usize, usize),
     texture: *mut SDL_Texture,
 }
 
@@ -33,8 +34,8 @@ impl Platform {
 
             let window = SDL_CreateWindow(
                 c"vega68".as_ptr(),
-                (WIDTH * scale) as i32,
-                (HEIGHT * scale) as i32,
+                (LO.w * scale) as i32,
+                (LO.h * scale) as i32,
                 SDL_WINDOW_RESIZABLE,
             );
 
@@ -42,6 +43,7 @@ impl Platform {
                 Self::fatal("SDL_CreateWindow");
             }
 
+            SDL_SetWindowMinimumSize(window, HI.w as i32, HI.h as i32);
             SDL_SetWindowPosition(window, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED);
 
             let renderer = SDL_CreateRenderer(window, ptr::null());
@@ -50,31 +52,15 @@ impl Platform {
                 Self::fatal("SDL_CreateRenderer");
             }
 
-            if !SDL_SetRenderLogicalPresentation(
-                renderer,
-                WIDTH as i32,
-                HEIGHT as i32,
-                SDL_LOGICAL_PRESENTATION_INTEGER_SCALE,
-            ) {
-                Self::fatal("SDL_SetRenderLogicalPresentation");
-            }
+            let texture = Self::set_size(renderer, LO.w, LO.h);
 
-            let texture = SDL_CreateTexture(
-                renderer,
-                SDL_PIXELFORMAT_XRGB8888,
-                SDL_TEXTUREACCESS_STREAMING,
-                WIDTH as i32,
-                HEIGHT as i32,
-            );
-
-            if texture.is_null() {
-                Self::fatal("SDL_CreateTexture");
-            }
-
-            SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
             SDL_HideCursor();
 
-            Platform { renderer, texture }
+            Platform {
+                renderer,
+                size: (LO.w, LO.h),
+                texture,
+            }
         }
     }
 
@@ -122,7 +108,9 @@ impl Platform {
 
                     SDL_EVENT_MOUSE_MOTION => {
                         SDL_ConvertEventToRenderCoordinates(self.renderer, &mut ev);
-                        input.set_cursor(ev.motion.x as f64, ev.motion.y as f64);
+                        let k = (HI.w / self.size.0) as f64;
+
+                        input.set_cursor(ev.motion.x as f64 * k, ev.motion.y as f64 * k);
                     }
 
                     SDL_EVENT_MOUSE_BUTTON_DOWN | SDL_EVENT_MOUSE_BUTTON_UP => {
@@ -147,13 +135,19 @@ impl Platform {
         true
     }
 
-    pub fn present(&self, frame: &[u32]) {
+    pub fn present(&mut self, frame: &[u32], w: usize, h: usize) {
         unsafe {
+            if (w, h) != self.size {
+                SDL_DestroyTexture(self.texture);
+                self.texture = Self::set_size(self.renderer, w, h);
+                self.size = (w, h);
+            }
+
             SDL_UpdateTexture(
                 self.texture,
                 ptr::null(),
                 frame.as_ptr().cast(),
-                (WIDTH * 4) as i32,
+                (w * 4) as i32,
             );
             SDL_RenderClear(self.renderer);
             SDL_RenderTexture(self.renderer, self.texture, ptr::null(), ptr::null());
@@ -172,8 +166,8 @@ impl Platform {
             return Self::DEFAULT_SCALE;
         };
 
-        (w as usize / WIDTH)
-            .min(h as usize / HEIGHT)
+        (w as usize / LO.w)
+            .min(h as usize / LO.h)
             .clamp(1, Self::DEFAULT_SCALE)
     }
 
@@ -181,6 +175,35 @@ impl Platform {
         let err = unsafe { CStr::from_ptr(SDL_GetError()) };
 
         crate::error(&format!("{what}: {}", err.to_string_lossy()))
+    }
+
+    fn set_size(renderer: *mut SDL_Renderer, w: usize, h: usize) -> *mut SDL_Texture {
+        unsafe {
+            if !SDL_SetRenderLogicalPresentation(
+                renderer,
+                w as i32,
+                h as i32,
+                SDL_LOGICAL_PRESENTATION_INTEGER_SCALE,
+            ) {
+                Self::fatal("SDL_SetRenderLogicalPresentation");
+            }
+
+            let texture = SDL_CreateTexture(
+                renderer,
+                SDL_PIXELFORMAT_XRGB8888,
+                SDL_TEXTUREACCESS_STREAMING,
+                w as i32,
+                h as i32,
+            );
+
+            if texture.is_null() {
+                Self::fatal("SDL_CreateTexture");
+            }
+
+            SDL_SetTextureScaleMode(texture, SDL_SCALEMODE_NEAREST);
+
+            texture
+        }
     }
 }
 
@@ -206,6 +229,10 @@ mod tests {
             assert_eq!(Platform::auto_scale(Some((w, h))), scale, "monitor {w}x{h}");
         }
 
-        assert_eq!(Platform::auto_scale(None), Platform::DEFAULT_SCALE, "no monitor");
+        assert_eq!(
+            Platform::auto_scale(None),
+            Platform::DEFAULT_SCALE,
+            "no monitor"
+        );
     }
 }

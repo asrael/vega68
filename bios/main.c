@@ -1,4 +1,5 @@
 #include "bios.h"
+#include "gfx.h"
 #include "sys.h"
 
 #define V68_CART  ((volatile u8 *)0x01000000)
@@ -7,6 +8,7 @@
 void __attribute__((noreturn)) v68_reset(void) {
     *V68_IRQ_ENABLE = 0;
     *V68_IRQ_ACK = V68_IRQ_VBLANK | V68_IRQ_LINE;
+    *V68_SCREEN_MODE = V68_MODE_LO;
 
     V68_VEC_VBLANK = (u32)v68_rte_stub;
     V68_VEC_LINE = (u32)v68_rte_stub;

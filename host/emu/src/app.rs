@@ -2,7 +2,7 @@ use std::time::{Duration, Instant};
 
 use vega68::System;
 use vega68::bus;
-use vega68::vdp::{HEIGHT, WIDTH};
+use vega68::vdp::HI;
 
 use crate::sdl::{AudioOut, Input, Platform};
 use crate::watch::Watch;
@@ -23,7 +23,7 @@ impl App {
     pub fn new(system: System, scale: Option<usize>, watch: Option<Watch>) -> App {
         App {
             audio: AudioOut::new(),
-            frame: vec![0u32; WIDTH * HEIGHT],
+            frame: vec![0u32; HI.w * HI.h],
             input: Input::default(),
             next_frame: Instant::now(),
             platform: Platform::new(scale),
@@ -62,7 +62,7 @@ impl App {
                 self.input.drive_cursor();
 
                 self.system.bus.pads[0] = pads;
-                self.system.bus.mouse = [self.input.cursor.0 as u16, self.input.cursor.1 as u16];
+                self.system.bus.mouse = self.input.pointer(self.system.bus.mode_next == 1);
                 self.system.bus.mouse_btn = buttons;
                 self.system.run_frame();
 
@@ -71,7 +71,10 @@ impl App {
                 }
 
                 self.system.render(&mut self.frame);
-                self.platform.present(&self.frame);
+
+                let mode = self.system.mode();
+                self.platform
+                    .present(&self.frame[..mode.w * mode.h], mode.w, mode.h);
                 self.next_frame = (self.next_frame + FRAME).max(now - FRAME);
             }
 
@@ -86,7 +89,7 @@ impl App {
     }
 
     pub fn run_headless(mut system: System, frames: u64, mut watch: Option<Watch>) {
-        let mut frame = vec![0u32; WIDTH * HEIGHT];
+        let mut frame = vec![0u32; HI.w * HI.h];
 
         for i in 0..frames {
             if let Some(w) = &mut watch {
@@ -95,9 +98,15 @@ impl App {
 
             system.run_frame();
             system.render(&mut frame);
+            let mode = system.mode();
+
             println!(
                 "frame {i} {:016x}",
-                vega68::fnv1a64(frame.iter().flat_map(|p| p.to_le_bytes()))
+                vega68::fnv1a64(
+                    frame[..mode.w * mode.h]
+                        .iter()
+                        .flat_map(|p| p.to_le_bytes())
+                )
             );
         }
     }

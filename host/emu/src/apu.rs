@@ -10,7 +10,6 @@ pub const CH_STRIDE: u32 = 0x40;
 pub const PAN_OFF: [usize; 14] = [
     0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x1F, 0x03, 0x03, 0x03, 0x03, 0x0F, 0x0F,
 ];
-pub const SAMPLES_PER_LINE: usize = 4;
 
 const ECHO_RING_LEN: usize = 49_160;
 const EDELAY: u32 = GLOBAL + 0x12;
@@ -126,12 +125,12 @@ impl Apu {
         }
     }
 
-    pub fn run_line(&mut self, mem: &[u8], line: u32) {
+    pub fn run_line(&mut self, mem: &[u8], line: u32, samples: usize) {
         if line == 0 {
             self.frame.clear();
         }
 
-        for _ in 0..SAMPLES_PER_LINE {
+        for _ in 0..samples {
             let (l, r) = self.mix(mem);
 
             self.frame.push((l.clamp(-1.0, 1.0) * 32767.0) as i16);

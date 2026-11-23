@@ -506,10 +506,10 @@ mod tests {
         run_frame(&mut a, &[]);
         let loud = peak_i(&a.frame);
 
-        a.run_line(&[], 0);
+        a.run_line(&[], 0, 4);
         a.frame.clear();
         a.write(KEYON_ADDR, 0x10);
-        a.run_line(&[], 1);
+        a.run_line(&[], 1, 4);
 
         let first = a.frame[0].unsigned_abs() as i16;
 
@@ -791,7 +791,7 @@ mod tests {
         a.write(KEYON_ADDR, 0xF0);
         // key out of phase: an in-phase product never crosses zero
         for line in 0..7 {
-            a.run_line(&[], line);
+            a.run_line(&[], line, 4);
         }
         a.write(KEYON_ADDR, 0xF1);
 

@@ -83,14 +83,14 @@ mod tests {
         pcm_setup(&mut a, 0x10, 16, 48000);
         a.write(KEYON_ADDR, 0x1C);
 
-        a.run_line(&mem, 0);
+        a.run_line(&mem, 0, 4);
         assert_eq!(
             a.frame[0], 10837,
             "first sample not at the expected full-scale level"
         );
 
         for line in 1..200 {
-            a.run_line(&mem, line);
+            a.run_line(&mem, line, 4);
         }
         assert_eq!(
             status(&a) & (1 << 12),

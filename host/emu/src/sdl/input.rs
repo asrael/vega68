@@ -1,7 +1,7 @@
 use sdl3_sys::everything::*;
 
 use vega68::bus;
-use vega68::vdp::{HEIGHT, WIDTH};
+use vega68::vdp::HI;
 
 #[derive(Default)]
 pub struct Input {
@@ -14,7 +14,7 @@ pub struct Input {
 }
 
 impl Input {
-    const CURSOR_SPEED: f64 = 4.0;
+    const CURSOR_SPEED: f64 = 8.0;
     const DEADZONE: i16 = 4_915;
     const STICK_ON: i16 = 16_384;
 
@@ -97,10 +97,19 @@ impl Input {
         })
     }
 
+    pub fn pointer(&self, hi: bool) -> [u16; 2] {
+        let shift = !hi as u32;
+
+        [
+            (self.cursor.0 as u16) >> shift,
+            (self.cursor.1 as u16) >> shift,
+        ]
+    }
+
     pub fn set_cursor(&mut self, x: f64, y: f64) {
         self.cursor = (
-            x.clamp(0.0, (WIDTH - 1) as f64),
-            y.clamp(0.0, (HEIGHT - 1) as f64),
+            x.clamp(0.0, (HI.w - 1) as f64),
+            y.clamp(0.0, (HI.h - 1) as f64),
         );
     }
 }
@@ -132,24 +141,50 @@ mod tests {
             input.apply_axis(axis, raw);
 
             assert_eq!(input.lstick, lstick, "axis {} raw {raw}", axis.0);
-            assert!((input.rstick.0 - rx).abs() < 1e-3, "axis {} raw {raw} x", axis.0);
-            assert!((input.rstick.1 - ry).abs() < 1e-3, "axis {} raw {raw} y", axis.0);
+            assert!(
+                (input.rstick.0 - rx).abs() < 1e-3,
+                "axis {} raw {raw} x",
+                axis.0
+            );
+            assert!(
+                (input.rstick.1 - ry).abs() < 1e-3,
+                "axis {} raw {raw} y",
+                axis.0
+            );
         }
     }
 
     #[test]
     fn drive_cursor_integrates_rstick_and_clamps() {
         let mut input = Input {
-            cursor: (317.0, 2.0),
+            cursor: (637.0, 2.0),
             rstick: (1.0, -1.0),
             ..Input::default()
         };
 
         input.drive_cursor();
-        assert_eq!(input.cursor, (319.0, 0.0), "clamped at the corner");
+        assert_eq!(input.cursor, (639.0, 0.0), "clamped at the corner");
 
         input.rstick = (-0.5, 0.0);
         input.drive_cursor();
-        assert_eq!(input.cursor, (317.0, 0.0), "half tilt moves half speed");
+        assert_eq!(input.cursor, (635.0, 0.0), "half tilt moves half speed");
+    }
+
+    #[test]
+    fn pointer_halves_into_lo_res_and_keeps_its_place_across_a_switch() {
+        let mut input = Input {
+            cursor: (500.0, 300.0),
+            ..Input::default()
+        };
+
+        assert_eq!(input.pointer(true), [500, 300]);
+        assert_eq!(input.pointer(false), [250, 150]);
+        input.set_cursor(10_000.0, 10_000.0);
+        assert_eq!(input.pointer(true), [639, 359]);
+        assert_eq!(
+            input.pointer(false),
+            [319, 179],
+            "far edge left the lo-res screen"
+        );
     }
 }

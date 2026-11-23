@@ -1,4 +1,5 @@
 use crate::apu::Apu;
+use crate::vdp;
 
 pub const BIOS_SIZE: u32 = 0x0010_0000;
 pub const CART_BASE: u32 = 0x0100_0000;
@@ -11,7 +12,9 @@ pub const VRAM_BASE: u32 = 0x0300_0000;
 pub const VRAM_SIZE: u32 = 0x0008_0000;
 pub const PALETTE_BASE: u32 = 0x0308_0000;
 pub const PALETTE_SIZE: u32 = 0x0000_0400;
-pub const MEM_END: u32 = PALETTE_BASE + PALETTE_SIZE;
+pub const HI_TILES_BASE: u32 = 0x0310_0000;
+pub const HI_TILES_SIZE: u32 = 0x0010_0000;
+pub const MEM_END: u32 = HI_TILES_BASE + HI_TILES_SIZE;
 pub const MMIO_BASE: u32 = 0xFF00_0000;
 pub const AUDIO_BASE: u32 = 0xFF00_0400;
 pub const AUDIO_END: u32 = 0xFF00_0900;
@@ -23,6 +26,7 @@ pub const IRQ_ACK: u32 = 0xFF00_0008;
 pub const LINE_COMPARE: u32 = 0xFF00_000C;
 pub const BRIGHTNESS: u32 = 0xFF00_0010;
 pub const LINE_INTERVAL: u32 = 0xFF00_0014;
+pub const SCREEN_MODE: u32 = 0xFF00_0018;
 pub const MOUSE_BTN: u32 = 0xFF00_0110;
 pub const MOUSE_X: u32 = 0xFF00_0108;
 pub const MOUSE_Y: u32 = 0xFF00_010C;
@@ -47,9 +51,6 @@ pub const PAD_SELECT: u16 = 0x0200;
 pub const PAD_L: u16 = 0x0400;
 pub const PAD_R: u16 = 0x0800;
 
-pub const VISIBLE_LINES: u32 = 180;
-pub const LINES_PER_FRAME: u32 = 200;
-
 const DEBUG_OUT_CAP: usize = 64 * 1024;
 
 fn printable(b: u8) -> bool {
@@ -66,6 +67,8 @@ pub struct Bus {
     pub line_compare: u16,
     pub line_interval: u16,
     pub mem: Vec<u8>,
+    pub mode: u8,
+    pub mode_next: u8,
     pub mouse: [u16; 2],
     pub mouse_btn: u16,
     pub pads: [u16; 2],
@@ -89,11 +92,17 @@ impl Bus {
             line_compare: 0,
             line_interval: 0,
             mem,
+            mode: 0,
+            mode_next: 0,
             mouse: [0; 2],
             mouse_btn: 0,
             pads: [0; 2],
             reset_reason: 0,
         }
+    }
+
+    pub fn mode(&self) -> &'static vdp::Mode {
+        &vdp::MODES[self.mode as usize]
     }
 
     pub fn read_u8(&self, a: u32) -> u8 {
@@ -122,12 +131,13 @@ impl Bus {
 
     fn mmio_reg(&self, slot: u32) -> u16 {
         match slot {
-            VDP_STATUS => (((self.line >= VISIBLE_LINES) as u16) << 15) | self.line as u16,
+            VDP_STATUS => (((self.line >= self.mode().h as u32) as u16) << 15) | self.line as u16,
             IRQ_ENABLE => self.irq_enable,
             IRQ_ACK => self.irq_pending,
             LINE_COMPARE => self.line_compare,
             BRIGHTNESS => self.brightness as u16,
             LINE_INTERVAL => self.line_interval,
+            SCREEN_MODE => self.mode as u16,
             MOUSE_BTN => self.mouse_btn,
             MOUSE_X => self.mouse[0],
             MOUSE_Y => self.mouse[1],
@@ -181,6 +191,7 @@ impl Bus {
                 LINE_COMPARE => self.line_compare = value as u16,
                 BRIGHTNESS => self.brightness = value as u8,
                 LINE_INTERVAL => self.line_interval = value as u16,
+                SCREEN_MODE => self.mode_next = value as u8 & 1,
                 DEBUG_PUTC => {
                     let b = value as u8;
 
@@ -229,6 +240,20 @@ mod tests {
     }
 
     #[test]
+    fn screen_mode_write_waits_for_the_next_frame() {
+        let mut b = bus();
+
+        b.write_u16(SCREEN_MODE, 3);
+
+        assert_eq!(
+            b.read_u16(SCREEN_MODE),
+            0,
+            "a write showed before the frame boundary"
+        );
+        assert_eq!(b.mode_next, 1, "only bit 0 is the mode");
+    }
+
+    #[test]
     fn pads_and_brightness_read_back() {
         let mut b = bus();
 
@@ -247,11 +272,7 @@ mod tests {
         let mut b = bus();
 
         b.write_u16(IRQ_ENABLE, 0b11);
-        assert_eq!(
-            b.read_u16(IRQ_ENABLE),
-            0b11,
-            "IRQ_ENABLE did not read back"
-        );
+        assert_eq!(b.read_u16(IRQ_ENABLE), 0b11, "IRQ_ENABLE did not read back");
 
         b.write_u16(IRQ_ENABLE, 0xFF);
         assert_eq!(

@@ -48,7 +48,9 @@ fn header_matches_emulator_abi() {
         ("V68_TILEMAPS", format!("{:#010X}", bus::VRAM_BASE + 0x4_0000)),
         ("V68_SPRITES", format!("{:#010X}", bus::VRAM_BASE + 0x6_0000)),
         ("V68_SCROLL", format!("{:#010X}", bus::VRAM_BASE + 0x6_1000)),
+        ("V68_SCROLL_HI_LINES", format!("{:#010X}", bus::VRAM_BASE + 0x6_2000)),
         ("V68_PALETTE", format!("{:#010X}", bus::PALETTE_BASE)),
+        ("V68_TILES_HI", format!("{:#010X}", bus::HI_TILES_BASE)),
     ];
 
     for (name, value) in defines {
@@ -159,7 +161,7 @@ fn vblank_and_line_mask_invariants() {
     let line_mask = header_const(&header, "V68_LINE_MASK");
 
     assert!(
-        line_mask >= bus::LINES_PER_FRAME - 1,
+        line_mask >= vdp::HI.lines - 1,
         "V68_LINE_MASK ({line_mask:#X}) does not cover the largest line number"
     );
     assert_eq!(
@@ -232,12 +234,12 @@ fn gfx_flag_defines_match_the_renderer() {
     sprite(1, 30, 1);
     sprite(2, 40, on | 1);
 
-    let mut out = vec![0u32; vdp::WIDTH * vdp::HEIGHT];
-    vdp::render(&mem, 255, &mut out);
+    let mut out = vec![0u32; vdp::LO.w * vdp::LO.h];
+    vdp::render(&mem, &vdp::LO, 255, &mut out);
 
     assert_eq!(out[7], 0x0011_1111, "V68_HFLIP is not the cell h-flip bit");
     assert_eq!(
-        out[7 * vdp::WIDTH + 8],
+        out[7 * vdp::LO.w + 8],
         0x0011_1111,
         "V68_VFLIP is not the cell v-flip bit"
     );
